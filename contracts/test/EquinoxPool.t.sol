@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import { PoolFixture } from "./PoolFixture.sol";
+import { Vm } from "forge-std/Vm.sol";
 import { EquinoxPool } from "../src/pool/EquinoxPool.sol";
 import { EquinoxOptionToken } from "../src/pool/EquinoxOptionToken.sol";
 import { EquinoxVolEngine } from "../src/pool/EquinoxVolEngine.sol";
@@ -114,8 +115,14 @@ contract EquinoxPoolTest is PoolFixture {
         vm.warp(expiry);
         tick(4500e8);
         address keeper = makeAddr("keeper");
+        vm.recordLogs();
         vm.prank(keeper);
         pool.settle(boardId);
+        (uint256 sT, uint256 added, uint256 released) = _settledEvent(vm.getRecordedLogs(), boardId);
+        assertEq(sT, 4500e18);
+        assertEq(added, 3000e18);
+        assertEq(released, 42_000e18);
+        assertLe(added, released, "INV-13: escrow added <= reserve released");
         assertEq(usdg.balanceOf(keeper), 2e6, "bounty");
         (, , , , bool settled, , , uint256 payoutPerUnit) = pool.series(id);
         assertTrue(settled);
@@ -152,7 +159,12 @@ contract EquinoxPoolTest is PoolFixture {
         pool.buy(id, 20e18, type(uint256).max);
         vm.warp(expiry);
         tick(40_000e8);
+        vm.recordLogs();
         pool.settle(boardId);
+        (, uint256 added, uint256 released) = _settledEvent(vm.getRecordedLogs(), boardId);
+        assertEq(added, 800_000e18);
+        assertEq(released, 800_000e18);
+        assertLe(added, released, "INV-13: escrow added <= reserve released (equal at the cap)");
         assertEq(pool.escrowedPayouts(), 800_000e18, "payout = reserved (cap)");
         vm.prank(trader);
         pool.claim(id, 200e18);
@@ -813,6 +825,61 @@ contract EquinoxPoolTest is PoolFixture {
         assertLe(qc, qb.premiumAssets, "(b) quoteClose must never exceed quoteBuy");
         assertLe(qc, p0Wad * size / WAD / 1e12, "(c) close must never pay above the mark");
         assertGe(qb.premiumAssets, (p0Wad * size / WAD + 1e12 - 1) / 1e12, "(c) buy must never charge below the mark");
+    }
+
+    // ------------------------------------------------------------ fix wave (final review)
+
+    /// @dev Decode the `Settled(boardId, settlementPriceWad, escrowedAddedWad, reservedReleasedWad)` event of `boardId`
+    ///      from recorded logs (exactly one such event must be present).
+    function _settledEvent(Vm.Log[] memory logs, uint256 boardId) internal view returns (uint256 sT, uint256 added, uint256 released) {
+        bytes32 sig = keccak256("Settled(uint256,uint256,uint256,uint256)");
+        uint256 found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(pool) || logs[i].topics.length != 2 || logs[i].topics[0] != sig) continue;
+            if (uint256(logs[i].topics[1]) != boardId) continue;
+            (sT, added, released) = abi.decode(logs[i].data, (uint256, uint256, uint256));
+            found++;
+        }
+        assertEq(found, 1, "exactly one Settled event");
+    }
+
+    /// @dev Shared state for the settle-neutrality tests: 1M LP, 7-day board, 100 C4000 + 100 P4000 open (reserved
+    ///      800k = the 80% util cap), spot unchanged at expiry and a fresh round exactly at `expiry`.
+    function _atmBoardAtExpiry() internal returns (uint256 boardId) {
+        lpDeposit(1_000_000e6);
+        uint64 expiry;
+        (boardId, expiry, ) = listBoard7d();
+        traderBuy(sid(expiry, 4000e18, true), 100e18);
+        traderBuy(sid(expiry, 4000e18, false), 100e18);
+        assertEq(pool.reserved(), 800_000e18);
+        vm.warp(expiry);
+        tick(4000e8);
+    }
+
+    /// I-1 (final review): series in the pre-expiry blackout / past expiry are marked at intrinsic on the current spot,
+    /// so `settle` on the same round moves NAV by exactly the bounty -- no time-value jump a JIT depositor could capture.
+    function test_settle_is_nav_neutral_except_bounty() public {
+        uint256 boardId = _atmBoardAtExpiry();
+        uint256 before = pool.totalAssets();
+        pool.settle(boardId);
+        (, , , , , , , , , , uint128 settleBounty) = pool.cfg();
+        assertEq(pool.totalAssets(), before - settleBounty, "settle moves NAV by the bounty only");
+    }
+
+    /// I-1 (final review): deposit -> settle -> redeem-all in one block must not pay more than the bounty the attacker
+    /// legitimately earned as the settler (before the fix: +213,289,492 on this exact state).
+    function test_jit_settle_sandwich_cannot_profit() public {
+        uint256 boardId = _atmBoardAtExpiry();
+        (, , , , , , , , , , uint128 settleBounty) = pool.cfg();
+        address attacker = makeAddr("jitSettler");
+        usdg.mint(attacker, 20_000_000e6);
+        vm.startPrank(attacker);
+        usdg.approve(address(pool), type(uint256).max);
+        uint256 shares = pool.deposit(20_000_000e6, attacker);
+        pool.settle(boardId);
+        pool.redeem(shares, attacker, attacker);
+        vm.stopPrank();
+        assertLe(usdg.balanceOf(attacker), 20_000_000e6 + settleBounty, "JIT settle sandwich must not profit beyond the bounty");
     }
 
     // ------------------------------------------------------------ access control & re-entrancy (Task 6)

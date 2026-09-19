@@ -395,13 +395,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
             uint256 id = b.seriesIds[i];
             Series storage sr = series[id];
             uint256 k = sr.strike;
-            uint256 payout;
-            if (sr.isCall) {
-                payout = sT > k ? sT - k : 0;
-                if (payout > k) payout = k; // cap = 2K → payout maksimum K
-            } else {
-                payout = k > sT ? k - sT : 0;
-            }
+            uint256 payout = _payoutPerUnit(sT, k, sr.isCall);
             sr.settled = true;
             sr.payoutPerUnit = payout;
             added += sr.oi * payout / WAD;
@@ -592,9 +586,14 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     /// @dev Kewajiban (WAD): MtM via satu panggilan markPortfolio pada σ_mark(0) (σ_base × VRP, TANPA dampak
     ///      inventaris/util — util bergantung pada `cash`/`netVega`, yang berubah tepat oleh deposit/redeem itu
-    ///      sendiri, sehingga memakainya di sini membuka manipulasi NAV, lihat C-1). `conservative = true` berarti
-    ///      nilai kembalian adalah `reserved` (oracle stale, atau `vol`/`math` gagal — FR-36); dipakai `deposit`/
-    ///      `mint` untuk menolak mint pada NAV konservatif (I-1).
+    ///      sendiri, sehingga memakainya di sini membuka manipulasi NAV, lihat C-1). Seri dalam blackout pra-expiry
+    ///      atau yang sudah lewat expiry (`expiry <= now + T_MIN`, predikat yang sama dengan `_openSeries`) TIDAK
+    ///      diberi nilai waktu: mereka di-mark pada nilai intrinsik terhadap spot saat ini (`_payoutPerUnit`, rumus
+    ///      yang sama dengan `settle`) dan dilewatkan oleh markPortfolio lewat `oi[i] = 0`. Dengan begitu `settle`
+    ///      hanya menggeser NAV sebesar bounty dan selisih antara spot mark dan round settlement — tidak ada lompatan
+    ///      NAV yang bisa ditangkap deposit→settle→redeem (I-1 review akhir). `conservative = true` berarti nilai
+    ///      kembalian adalah `reserved` (oracle stale, atau `vol`/`math` gagal — FR-36); dipakai `deposit`/`mint`
+    ///      untuk menolak mint pada NAV konservatif (I-1).
     function _liabilityWad() internal view returns (uint256 liability, bool conservative) {
         uint256 n = _openSeriesIds.length;
         if (n == 0) return (0, false);
@@ -604,14 +603,17 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         uint256[] memory t = new uint256[](n);
         bool[] memory isCall = new bool[](n);
         uint256[] memory oi = new uint256[](n);
+        uint256 intrinsic;
         for (uint256 i = 0; i < n; i++) {
             Series storage sr = series[_openSeriesIds[i]];
             k[i] = sr.strike;
-            uint256 secs = sr.expiry > block.timestamp ? sr.expiry - block.timestamp : 0;
-            if (secs < T_MIN) secs = T_MIN; // seri di ambang expiry ≈ intrinsik; hindari revert domain
-            t[i] = secs * WAD / SECONDS_PER_YEAR;
             isCall[i] = sr.isCall;
-            oi[i] = sr.oi;
+            if (sr.expiry <= block.timestamp + T_MIN) {
+                intrinsic += sr.oi * _payoutPerUnit(sp.priceWad, sr.strike, sr.isCall) / WAD; // oi[i] tetap 0
+            } else {
+                t[i] = (sr.expiry - block.timestamp) * WAD / SECONDS_PER_YEAR;
+                oi[i] = sr.oi;
+            }
         }
         uint256 sigma;
         try vol.sigmaMark(0) returns (uint256 s) {
@@ -620,10 +622,21 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
             return (reserved, true);
         }
         try math.markPortfolio(sp.priceWad, rWad, sigma, CAP_MULT, k, t, isCall, oi) returns (uint256 mid, int256) {
-            return (mid, false);
+            return (mid + intrinsic, false);
         } catch {
             return (reserved, true);
         }
+    }
+
+    /// @dev Payout per unit (WAD) pada harga `s`: call = min(max(S − K, 0), K) (cap 2K), put = max(K − S, 0).
+    ///      Satu-satunya rumus payout — dipakai `settle` (harga settlement) dan `_liabilityWad` (spot saat ini untuk
+    ///      seri blackout/expired) agar keduanya tidak bisa menyimpang.
+    function _payoutPerUnit(uint256 s, uint256 k, bool isCall) internal pure returns (uint256) {
+        if (isCall) {
+            uint256 p = s > k ? s - k : 0;
+            return p > k ? k : p;
+        }
+        return k > s ? k - s : 0;
     }
 
     function _removeOpen(uint256 id) internal {
