@@ -22,7 +22,7 @@ contract PoolDeployer {
 }
 
 /// @title EquinoxFactory — men-deploy vol engine + token ERC-1155, lalu pool lewat PoolDeployer, mengikat token, mencatat (§8.6).
-/// @notice Demo memanggilnya dua kali dengan `math` berbeda: kontrol Solidity (Pool A) dan Stylus (Pool B).
+/// @notice Demo memanggil createPool (Pool B, engine baru) lalu createPoolWithVol (Pool A memakai engine Pool B) — K4.
 contract EquinoxFactory {
     PoolDeployer public immutable poolDeployer;
     address[] public pools;
@@ -40,6 +40,20 @@ contract EquinoxFactory {
         token.bindPool(pool);
         pools.push(pool);
         emit PoolCreated(pool, address(token), address(vol), d.math, d.usdg, d.feed);
+    }
+
+    error VolFeedMismatch();
+
+    /// @notice Seperti `createPool`, tetapi memakai `EquinoxVolEngine` yang sudah ada (K4: dua pool berbagi σ yang identik
+    ///         by construction — pada feed hidup dua engine terpisah menyimpang karena histori observasinya berbeda).
+    ///         `d.vol` dan `d.sigmaSeed` diabaikan; `d.feed` harus sama dengan `vol.feed()`.
+    function createPoolWithVol(EquinoxPool.Deploy calldata d, address vol) external returns (address pool) {
+        if (address(EquinoxVolEngine(vol).feed()) != d.feed) revert VolFeedMismatch();
+        EquinoxOptionToken token = new EquinoxOptionToken();
+        pool = poolDeployer.deploy(d, address(token), vol);
+        token.bindPool(pool);
+        pools.push(pool);
+        emit PoolCreated(pool, address(token), vol, d.math, d.usdg, d.feed);
     }
 
     function poolCount() external view returns (uint256) {
