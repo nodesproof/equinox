@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { SD59x18, sd, exp as prbExp, ln as prbLn } from "@prb/math/src/SD59x18.sol";
+import { sd, exp as prbExp, ln as prbLn } from "@prb/math/src/SD59x18.sol";
 import { UD60x18, ud, sqrt as prbSqrt } from "@prb/math/src/UD60x18.sol";
 import { IBlackScholes } from "../interfaces/IBlackScholes.sol";
 import { BsConstants as K_ } from "./BsConstants.sol";
@@ -196,6 +196,7 @@ contract BlackScholesSol is IBlackScholes {
         if (pNow <= 0) revert OutOfDomain(2);
         if (dt <= 0) revert OutOfDomain(3);
         if (lambda <= 0 || lambda >= WAD) revert OutOfDomain(4);
+        if (dt > type(int256).max / WAD) revert Overflow();   // paritas dengan checked_mul Rust (selector Overflow, bukan Panic 0x11)
         int256 dtDays = dt * WAD / 86400;
         int256 w = _exp(_mul(dtDays, _ln(lambda)));
         int256 lr = _ln(_div(pNow, pPrev));
