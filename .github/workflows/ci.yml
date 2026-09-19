@@ -1,0 +1,42 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: selftest emulasi WAD
+        run: python3 tools/reference/wad_emul.py
+      - name: konstanta & vektor yang di-commit harus identik dengan generator
+        run: |
+          python3 tools/reference/gen_constants.py /tmp/c.rs /tmp/c.sol
+          diff /tmp/c.rs stylus/bs-math/src/constants.rs && diff /tmp/c.sol contracts/src/math/BsConstants.sol
+          python3 tools/reference/gen_vectors.py /tmp/v.rs /tmp/v.sol
+          diff /tmp/v.rs stylus/bs-math/tests/common/vectors_gen.rs && diff /tmp/v.sol contracts/test/VectorsGen.sol
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - name: bs-math L1
+        run: cd stylus/bs-math && cargo test
+      - name: bs-stylus wasm build
+        run: cd stylus/bs-stylus && cargo build --release --target wasm32-unknown-unknown
+      - name: cargo stylus check (Sepolia publik)
+        run: |
+          cargo install cargo-stylus --version 0.10.9 --locked
+          cd stylus/bs-stylus && cargo stylus check --endpoint https://sepolia-rollup.arbitrum.io/rpc
+  foundry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: L3 kontrol Solidity
+        run: |
+          cd contracts
+          test -d lib/forge-std || forge install foundry-rs/forge-std --no-git
+          test -d lib/prb-math || forge install PaulRBerg/prb-math@v4.1.0 --no-git
+          forge test
