@@ -1,0 +1,9 @@
+target/
+out/
+cache/
+node_modules/
+.env
+__pycache__/
+*.pyc
+deployments/devnode.json
+tools/devnode/.nitro-devnode/
