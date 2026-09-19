@@ -67,4 +67,21 @@ contract OracleLibTest is Test {
         assertEq(s.priceWad, 0);
         assertFalse(h.read(address(feed), address(bad), 1e10, 3600, 3, 3600).fresh); // sequencer feed revert → tidak segar
     }
+
+    function test_future_sequencer_startedAt_is_not_fresh_and_does_not_revert() public {
+        seqf.set(0, T0 + 1000); // "up" tetapi startedAt di masa depan
+        OracleLib.Spot memory s = h.read(address(feed), address(seqf), 1e10, 3600, 3, 3600);
+        assertFalse(s.fresh);
+        assertEq(s.priceWad, 0);
+    }
+
+    function test_future_updatedAt_is_not_fresh() public {
+        feed.set(4000e8, T0 + 100);
+        assertFalse(h.read(address(feed), address(seqf), 1e10, 3600, 3, 3600).fresh);
+    }
+
+    function test_grace_zero_accepts_immediately() public {
+        seqf.set(0, T0); // baru naik, grace 0 → langsung segar
+        assertTrue(h.read(address(feed), address(seqf), 1e10, 3600, 3, 0).fresh);
+    }
 }

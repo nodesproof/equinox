@@ -40,6 +40,7 @@ library OracleLib {
         try sequencerFeed.latestRoundData() returns (uint80, int256 answer, uint256 startedAt, uint256, uint80) {
             // Konvensi Chainlink: answer 0 = up, 1 = down; startedAt = saat status terakhir berubah.
             if (answer != 0) return false;
+            if (startedAt > block.timestamp) return false;
             return block.timestamp - startedAt >= grace;
         } catch {
             return false;
