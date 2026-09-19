@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RPC=$(jq -r .rpc "$DEP"); MATH_B=$(jq -r .blackScholesStylus "$DEP"); MATH_A=$(jq -r .blackScholesSol "$DEP")
 ME=$(cast wallet address --private-key "$PK")
 cd "$ROOT/contracts"
-DEPLOYER=$(forge create --rpc-url "$RPC" --private-key "$PK" --broadcast src/mocks/PoolE2EDeployer.sol:PoolE2EDeployer --constructor-args "$ME" "$MATH_A" "$MATH_B" | grep "Deployed to" | awk '{print $3}')
+DEPLOYER=$(forge create --rpc-url "$RPC" --private-key "$PK" --broadcast src/mocks/PoolE2EDeployer.sol:PoolE2EDeployer --constructor-args "$ME" "$MATH_A" "$MATH_B" 0x0000000000000000000000000000000000000000 false | grep "Deployed to" | awk '{print $3}')
 [ -n "$DEPLOYER" ] || { echo "deploy gagal"; exit 1; }
 USDG=$(cast call --rpc-url "$RPC" "$DEPLOYER" "usdg()(address)")
 A=$(cast call --rpc-url "$RPC" "$DEPLOYER" "poolA()(address)")
