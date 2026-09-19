@@ -52,5 +52,5 @@ echo "| Operasi (pool, on-chain) | Gas A (kontrol Solidity) | Gas B (Stylus) | R
 echo "|---|---|---|---|"
 printf "| buy 10 C4200 (ERC-20 + ERC-1155 + 5 panggilan math: 3× sqrt + 2× cappedCall) | %s | %s | %.2fx |\n" "$G_BUY_A" "$G_BUY_B" "$(echo "scale=2; $G_BUY_A/$G_BUY_B" | bc)"
 printf "| close 5 (ERC-20 + ERC-1155 + 5 panggilan math: 3× sqrt + 2× cappedCall) | %s | %s | %.2fx |\n" "$G_CLOSE_A" "$G_CLOSE_B" "$(echo "scale=2; $G_CLOSE_A/$G_CLOSE_B" | bc)"
-printf "| deposit dengan 6 seri terbuka (NAV MtM; 5 panggilan math: 3× sqrt + 2× markPortfolio) | %s | %s | %.2fx |\n" "$G_DEP_A" "$G_DEP_B" "$(echo "scale=2; $G_DEP_A/$G_DEP_B" | bc)"
+printf "| deposit dengan 6 seri terbuka (NAV MtM; 3 panggilan math: 2× sqrt + 1× markPortfolio) | %s | %s | %.2fx |\n" "$G_DEP_A" "$G_DEP_B" "$(echo "scale=2; $G_DEP_A/$G_DEP_B" | bc)"
 exit $fail
