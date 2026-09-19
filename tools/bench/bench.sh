@@ -10,11 +10,15 @@ DELTA=$((INIT_UNCACHED - INIT_CACHED))
 WAD=1000000000000000000
 S=4000000000000000000000; K=4200000000000000000000; T7=$((7*WAD/365)); SG=600000000000000000
 P2600=2600000000000000000000
+ret_mismatch=0   # 1 bila bytes return (baris ke-2 keluaran Bench.bench) berbeda antara kedua implementasi
 bench() { # name calldata
   local name=$1 data=$2
-  local a b
-  a=$(cast call --rpc-url $RPC $BENCH "bench(address,bytes)(uint256,bytes)" $SOL $data | head -1 | awk '{print $1}')
-  b=$(cast call --rpc-url $RPC $BENCH "bench(address,bytes)(uint256,bytes)" $STYLUS $data | head -1 | awk '{print $1}')
+  local oa ob a b ra rb
+  oa=$(cast call --rpc-url $RPC $BENCH "bench(address,bytes)(uint256,bytes)" $SOL $data)
+  ob=$(cast call --rpc-url $RPC $BENCH "bench(address,bytes)(uint256,bytes)" $STYLUS $data)
+  a=$(echo "$oa" | awk 'NR==1{print $1}'); ra=$(echo "$oa" | awk 'NR==2{print $1}')
+  b=$(echo "$ob" | awk 'NR==1{print $1}'); rb=$(echo "$ob" | awk 'NR==2{print $1}')
+  if [ "$ra" != "$rb" ]; then echo "BEDA-RET $name" >&2; ret_mismatch=1; fi
   local c=$((b - DELTA))
   printf "| %-42s | %9s | %9s | %9s | %5.1f× |\n" "$name" "$a" "$b" "$c" "$(echo "scale=2; $a/$c" | bc)"
 }
@@ -39,3 +43,4 @@ ks=[3400*W+i*80*W for i in range(32)]
 print('['+','.join(map(str,ks))+']', '['+','.join([str(T7)]*32)+']', '['+','.join(['true' if i%2==0 else 'false' for i in range(32)])+']', '['+','.join([str(W)]*32)+']')")
 set -- $ARR; KS=$1; TS=$2; CS=$3; OIS=$4
 bench "markPortfolio 32 seri (1 panggilan)" "$(cast calldata 'markPortfolio(uint256,int256,uint256,uint256,uint256[],uint256[],bool[],uint256[])' $S 0 $SG 2000000000000000000 "$KS" "$TS" "$CS" "$OIS")"
+exit $ret_mismatch

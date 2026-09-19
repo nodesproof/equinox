@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# L4: bandingkan keluaran on-chain (Stylus DAN kontrol Solidity) dengan emulasi Python (bit-eksak). Exit ≠ 0 bila beda.
-# Pakai: tools/bench/onchain-check.sh deployments/<name>.json
+# L4: bandingkan keluaran on-chain (Stylus DAN kontrol Solidity) dengan emulasi Python (bit-eksak): 10 pemeriksaan × 2 target = 20.
+# Exit ≠ 0 bila beda. Pakai: tools/bench/onchain-check.sh deployments/<name>.json
 set -euo pipefail
 DEP=$1
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -8,12 +8,18 @@ RPC=$(jq -r .rpc "$DEP"); STYLUS=$(jq -r .blackScholesStylus "$DEP"); SOL=$(jq -
 WAD=1000000000000000000; S=4000000000000000000000; K=4200000000000000000000; T7=$((7*WAD/365)); SG=600000000000000000
 readarray -t EXP < <(cd "$ROOT/tools/reference" && python3 -c "
 from wad_emul import *
-W=10**18; T7=7*W//365
+W=10**18; T7=7*W//365; T30=30*W//365
 print(norm_cdf_wad(-545600000000000000)); print(exp_wad(-W)); print(ln_wad(2*W)); print(sqrt_wad(2*W))
 print(*bs_quote_wad(4000*W, 4200*W, T7, 6*W//10, 0, True))
 print(*capped_call_wad(4000*W, 4200*W, 8400*W, T7, 6*W//10, 0))
 print(*implied_vol_wad(bs_quote_wad(4000*W, 4200*W, T7, 6*W//10, 0, True)[0], 4000*W, 4200*W, T7, 0, True))
-print(ewma_update_wad(302500000000000000, 4000*W, 4020*W, 21600, 94*W//100))")
+print(ewma_update_wad(302500000000000000, 4000*W, 4020*W, 21600, 94*W//100))
+print(norm_pdf_wad(-545600000000000000))
+print(*mark_portfolio_wad(4000*W, 0, 6*W//10, 2*W, [4200*W, 3800*W, 4000*W], [T7, T7, T30], [True, False, True], [10*W, 5*W, 0]))")
+# Argumen array markPortfolio kasus (i) (t_portfolio.rs) dibuat di Python: integer bash 64-bit meluap untuk 30·1e18.
+read -r PF_KS PF_TS PF_CS PF_OIS < <(python3 -c "
+W=10**18; T7=7*W//365; T30=30*W//365
+print('['+','.join(map(str,[4200*W,3800*W,4000*W]))+']', '['+','.join(map(str,[T7,T7,T30]))+']', '[true,false,true]', '['+','.join(map(str,[10*W,5*W,0]))+']')")
 fail=0
 check() { # label expected actual
   if [ "$2" == "$3" ]; then echo "OK   $1"; else echo "BEDA $1: expected=$2 actual=$3"; fail=1; fi
@@ -29,5 +35,7 @@ for T in "$STYLUS" "$SOL"; do
   PRICE=${EXP[4]%% *}
   check iv      "${EXP[6]}" "$(cast call --rpc-url $RPC $T 'impliedVol(uint256,uint256,uint256,uint256,int256,bool,uint256,uint256)(uint256,uint8)' $PRICE $S $K $T7 0 true 10000000000000000 5000000000000000000 | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
   check ewma    "${EXP[7]}" "$(cast call --rpc-url $RPC $T 'ewmaUpdate(uint256,uint256,uint256,uint256,uint256)(uint256)' 302500000000000000 $S 4020000000000000000000 21600 940000000000000000 | awk '{print $1}')"
+  check normPdf "${EXP[8]}" "$(cast call --rpc-url $RPC $T 'normPdf(int256)(uint256)' -- -545600000000000000 | awk '{print $1}')"
+  check portfolio "${EXP[9]}" "$(cast call --rpc-url $RPC $T 'markPortfolio(uint256,int256,uint256,uint256,uint256[],uint256[],bool[],uint256[])(uint256,int256)' $S 0 $SG 2000000000000000000 "$PF_KS" "$PF_TS" "$PF_CS" "$PF_OIS" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
 done
 exit $fail
