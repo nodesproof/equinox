@@ -125,6 +125,9 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     error SettlementNotReady();
     error NotSettled();
     error ConfigOutOfBounds(uint8 which);
+    error MathUnavailable();
+    error BoardUnknown();
+    error ZeroAddress();
 
     // ---------------------------------------------------------------- constructor
     /// @param token_ EquinoxOptionToken yang akan di-`bindPool` ke pool ini oleh factory; vol_ = EquinoxVolEngine.
@@ -140,6 +143,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         assetScale = 10 ** (18 - IERC20Metadata(d.usdg).decimals());
         rWad = d.rWad;
         _setConfig(d.cfg);
+        if (d.treasury == address(0)) revert ZeroAddress();
         treasury = d.treasury;
         token = EquinoxOptionToken(token_);
         vol = EquinoxVolEngine(vol_);
@@ -147,23 +151,32 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     // ================================================================ LP (ERC-4626)
 
-    /// @notice NAV = cash − escrow − nilai wajar opsi terbuka (mark-to-market lewat satu panggilan `markPortfolio`).
-    ///         Saat oracle stale atau `math` gagal: NAV konservatif = cash − escrow − reserved (FR-36).
+    /// @notice NAV = cash − escrow − nilai wajar opsi terbuka (mark-to-market lewat satu panggilan `markPortfolio`
+    ///         pada σ_mark(0) — bukan σ_mark(util) — sehingga NAV tidak bisa dimanipulasi lewat cash/netVega yang
+    ///         berubah pada deposit/redeem di blok yang sama (C-1). Kuotasi trading (`quoteBuy`/`quoteClose`) tetap
+    ///         memakai dampak inventaris seperti semula.
+    ///         Saat oracle stale atau `vol`/`math` gagal: NAV konservatif = cash − escrow − reserved (FR-36).
     function totalAssets() public view override returns (uint256) {
         uint256 cash = IERC20(asset()).balanceOf(address(this)) * assetScale;
         uint256 base = cash > escrowedPayouts ? cash - escrowedPayouts : 0;
-        uint256 liability = _liabilityWad(base);
+        (uint256 liability, ) = _liabilityWad();
         uint256 nav = base > liability ? base - liability : 0;
         return nav / assetScale;
     }
 
+    /// @dev Menolak deposit/mint saat `vol`/`math` sedang gagal — mencegah mint pada NAV konservatif lalu redeem
+    ///      pada NAV MtM begitu math pulih (I-1b). Withdraw/redeem tetap berjalan di atas NAV konservatif.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
         _requireFresh();
+        (, bool conservative) = _liabilityWad();
+        if (conservative) revert MathUnavailable();
         return super.deposit(assets, receiver);
     }
 
     function mint(uint256 shares, address receiver) public override returns (uint256) {
         _requireFresh();
+        (, bool conservative) = _liabilityWad();
+        if (conservative) revert MathUnavailable();
         return super.mint(shares, receiver);
     }
 
@@ -188,6 +201,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     // ================================================================ listing
 
     /// @notice Board = satu expiry (Jumat 08:00 UTC, tenor ≤ tenorMax) dengan call+put per strike (FR-19).
+    ///         Strike harus USDG bulat (kelipatan 1e18) — strike pecahan membuat reserve/release saat settle
+    ///         tidak presisi dan bisa underflow (I-2).
     function createBoard(uint64 expiry, uint128[] calldata strikes) external onlyOwner returns (uint256 boardId) {
         if (tradingPaused) revert TradingIsPaused();
         if (expiry <= block.timestamp || expiry - block.timestamp > cfg.tenorMax) revert BadExpiry();
@@ -202,7 +217,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         uint128 prev = 0;
         for (uint256 i = 0; i < n; i++) {
             uint128 k = strikes[i];
-            if (k <= prev || k < s / 2 || k > 2 * s) revert BadStrike();
+            if (k % WAD != 0 || k <= prev || k < s / 2 || k > 2 * s) revert BadStrike();
             prev = k;
             for (uint256 c = 0; c < 2; c++) {
                 bool isCall = c == 0;
@@ -228,6 +243,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Kuotasi beli: σ_buy = σ_mark(util setelah trade) × (1 + spread); premi ≥ floor (FR-13, FR-14, FR-23).
+    /// @dev `q.vegaTotal` dihitung pada σ_buy (setelah dampak inventaris + spread), bukan σ_mark mid — sengaja
+    ///      konservatif (lebih besar) untuk pembukuan `netVega`/vega cap di `buy`.
     function quoteBuy(uint256 seriesId, uint256 size) public view returns (QuoteOut memory q) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
@@ -261,6 +278,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Beli `size` unit (WAD) seri; membayar premi + fee dalam aset; mencetak ERC-1155 (FR-21, FR-24, FR-25).
+    /// @dev `maxPremiumAssets` adalah batas slippage atas premi + fee (total yang ditransfer dari trader); nilai
+    ///      kembalian (`premiumAssets`) hanya premi, tanpa fee.
     function buy(uint256 seriesId, uint256 size, uint256 maxPremiumAssets) external nonReentrant returns (uint256 premiumAssets) {
         if (tradingPaused) revert TradingIsPaused();
         if (size < cfg.minSize) revert SizeTooSmall();
@@ -291,11 +310,11 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         (proceedsAssets, sigmaClose, s) = quoteClose(seriesId, size);
         if (proceedsAssets < minProceedsAssets) revert SlippageExceeded();
         uint256 rel = _vegaRelease(sr, size);
-        token.burn(msg.sender, seriesId, size);
         sr.oi -= size;
         sr.vegaAcc -= rel;
         netVega -= rel;
         reserved -= uint256(sr.strike) * size / WAD;
+        token.burn(msg.sender, seriesId, size);
         IERC20(asset()).safeTransfer(msg.sender, proceedsAssets);
         emit Closed(seriesId, msg.sender, size, proceedsAssets, sigmaClose, s);
     }
@@ -304,6 +323,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     /// @notice Permissionless setelah expiry; memakai round Chainlink dengan `updatedAt ≥ expiry` yang masih segar (FR-27..29).
     function settle(uint256 boardId) external nonReentrant {
+        if (boardId >= _boards.length) revert BoardUnknown();
         Board storage b = _boards[boardId];
         if (b.settled) revert BoardAlreadySettled();
         if (block.timestamp < b.expiry) revert BoardNotExpired();
@@ -346,11 +366,11 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         Series storage sr = series[seriesId];
         if (sr.expiry == 0) revert SeriesUnknown();
         if (!sr.settled) revert NotSettled();
-        token.burn(msg.sender, seriesId, amount);
         sr.oi -= amount; // INV-4: totalSupply(id) == oi juga setelah settle
         uint256 payoutWad = amount * sr.payoutPerUnit / WAD;
         escrowedPayouts -= payoutWad;
         payoutAssets = payoutWad / assetScale;
+        token.burn(msg.sender, seriesId, amount);
         if (payoutAssets > 0) IERC20(asset()).safeTransfer(msg.sender, payoutAssets);
         emit Claimed(seriesId, msg.sender, amount, payoutAssets);
     }
@@ -368,6 +388,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     function setTreasury(address t) external onlyOwner {
+        if (t == address(0)) revert ZeroAddress();
         treasury = t;
         emit TreasuryUpdated(t);
     }
@@ -405,11 +426,13 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         if (c.maxUtilBps == 0 || c.maxUtilBps > 9000) revert ConfigOutOfBounds(1);
         if (c.vegaCapBps == 0 || c.vegaCapBps > 5000) revert ConfigOutOfBounds(2);
         if (c.minPremiumBps > 100) revert ConfigOutOfBounds(3);
-        if (c.heartbeat == 0) revert ConfigOutOfBounds(4);
+        if (c.heartbeat == 0 || c.heartbeat > 1 days) revert ConfigOutOfBounds(4);
         if (c.staleMult == 0) revert ConfigOutOfBounds(5);
         if (c.maxOpenSeries == 0 || c.maxOpenSeries > 32) revert ConfigOutOfBounds(6);
         if (c.tenorMax == 0 || c.tenorMax > 90 days) revert ConfigOutOfBounds(7);
         if (c.minSize == 0) revert ConfigOutOfBounds(8);
+        if (c.sequencerGrace > 1 days) revert ConfigOutOfBounds(9);
+        if (c.settleBounty > 100 * (WAD / assetScale)) revert ConfigOutOfBounds(10);
         cfg = c;
         emit ConfigUpdated(c);
     }
@@ -468,12 +491,16 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         return Math.min(rel, netVega);
     }
 
-    /// @dev Kewajiban (WAD): MtM via satu panggilan markPortfolio bila segar; `reserved` bila stale / math gagal (FR-36).
-    function _liabilityWad(uint256 capitalWad) internal view returns (uint256) {
+    /// @dev Kewajiban (WAD): MtM via satu panggilan markPortfolio pada σ_mark(0) (σ_base × VRP, TANPA dampak
+    ///      inventaris/util — util bergantung pada `cash`/`netVega`, yang berubah tepat oleh deposit/redeem itu
+    ///      sendiri, sehingga memakainya di sini membuka manipulasi NAV, lihat C-1). `conservative = true` berarti
+    ///      nilai kembalian adalah `reserved` (oracle stale, atau `vol`/`math` gagal — FR-36); dipakai `deposit`/
+    ///      `mint` untuk menolak mint pada NAV konservatif (I-1).
+    function _liabilityWad() internal view returns (uint256 liability, bool conservative) {
         uint256 n = _openSeriesIds.length;
-        if (n == 0) return 0;
+        if (n == 0) return (0, false);
         OracleLib.Spot memory sp = _spot();
-        if (!sp.fresh) return reserved;
+        if (!sp.fresh) return (reserved, true);
         uint256[] memory k = new uint256[](n);
         uint256[] memory t = new uint256[](n);
         bool[] memory isCall = new bool[](n);
@@ -487,13 +514,16 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
             isCall[i] = sr.isCall;
             oi[i] = sr.oi;
         }
-        uint256 cap = capitalWad * cfg.vegaCapBps / 10_000;
-        uint256 util = cap == 0 ? WAD : Math.min(netVega * WAD / cap, WAD);
-        uint256 sigma = vol.sigmaMark(util);
-        try math.markPortfolio(sp.priceWad, rWad, sigma, CAP_MULT, k, t, isCall, oi) returns (uint256 mid, int256) {
-            return mid;
+        uint256 sigma;
+        try vol.sigmaMark(0) returns (uint256 s) {
+            sigma = s;
         } catch {
-            return reserved;
+            return (reserved, true);
+        }
+        try math.markPortfolio(sp.priceWad, rWad, sigma, CAP_MULT, k, t, isCall, oi) returns (uint256 mid, int256) {
+            return (mid, false);
+        } catch {
+            return (reserved, true);
         }
     }
 

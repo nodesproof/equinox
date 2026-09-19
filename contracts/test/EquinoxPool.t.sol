@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import { PoolFixture } from "./PoolFixture.sol";
 import { EquinoxPool } from "../src/pool/EquinoxPool.sol";
 import { IBlackScholes } from "../src/interfaces/IBlackScholes.sol";
+import { MockSwitchableMath } from "../src/mocks/MockSwitchableMath.sol";
 
 /// @notice Skenario wajib PRD §12 (1–13) + properti INV-1..4, INV-9, INV-11, INV-14 pada jalur happy/edge.
 contract EquinoxPoolTest is PoolFixture {
@@ -360,5 +361,157 @@ contract EquinoxPoolTest is PoolFixture {
         tick(4000e8);
         uint256 nav1 = pool.totalAssets();
         assertGt(nav1, nav0, "theta accrues to LP");
+    }
+
+    // ------------------------------------------------------------ fix round 1 (security review)
+
+    /// C-1: deposit -> redeem ALL shares in the same block must never leave the depositor with more than they put
+    /// in. Before the fix, `_liabilityWad` priced open positions at `vol.sigmaMark(util)` where `util` shrinks as
+    /// live cash grows -- so a large deposit lowers the marked liability (raises NAV) right before the same-block
+    /// redeem, extracting LP value. After the fix (mark at `vol.sigmaMark(0)`, no cash/netVega dependence) this
+    /// must hold for any deposit size.
+    function testFuzz_deposit_redeem_roundtrip_never_profits(uint256 amount) public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4000e18, true);
+        for (uint256 i = 0; i < 4; i++) traderBuy(id, 50e18); // util ~= 80%
+        amount = bound(amount, 1e6, 20_000_000e6);
+        address attacker = makeAddr("attacker");
+        usdg.mint(attacker, amount);
+        vm.startPrank(attacker);
+        usdg.approve(address(pool), type(uint256).max);
+        uint256 shares = pool.deposit(amount, attacker);
+        pool.redeem(shares, attacker, attacker);
+        vm.stopPrank();
+        assertLe(usdg.balanceOf(attacker), amount, "deposit->redeem round trip must not profit");
+    }
+
+    /// I-1: both directions of the FR-36 math-failure path on a second pool wired to a switchable math mock.
+    /// (a) totalAssets() must degrade to the conservative NAV (never revert) when `vol`/`math` goes down.
+    /// (b) deposit must revert with MathUnavailable while down (never mint at the conservative NAV); withdraw
+    ///     and buy behave as specified (withdraw still works, buy reverts because quoteBuy calls math directly).
+    function test_math_down_paths() public {
+        MockSwitchableMath sw = new MockSwitchableMath(address(mathSol));
+        EquinoxPool p2 = EquinoxPool(factory.createPool(deployParams(address(sw))));
+        vm.prank(lp);
+        usdg.approve(address(p2), type(uint256).max);
+        vm.prank(trader);
+        usdg.approve(address(p2), type(uint256).max);
+
+        vm.prank(lp);
+        p2.deposit(1_000_000e6, lp);
+        uint64 expiry = uint64(T0 + WEEK);
+        uint128[] memory ks = new uint128[](3);
+        ks[0] = 3800e18;
+        ks[1] = 4000e18;
+        ks[2] = 4200e18;
+        p2.createBoard(expiry, ks);
+        uint256 id = p2.token().seriesId(address(p2), expiry, 4200e18, true);
+        vm.prank(trader);
+        p2.buy(id, 10e18, type(uint256).max);
+        uint256 navFresh = p2.totalAssets();
+        assertGt(navFresh, 0);
+
+        sw.setDown(true);
+        uint256 navConservative = p2.totalAssets();
+        assertEq(navConservative, usdg.balanceOf(address(p2)) - 42_000e6, "conservative NAV, no revert");
+
+        vm.expectRevert(EquinoxPool.MathUnavailable.selector);
+        vm.prank(lp);
+        p2.deposit(1e6, lp);
+
+        vm.prank(lp);
+        p2.withdraw(1000e6, lp, lp); // withdraw still works on the conservative NAV
+
+        vm.expectRevert();
+        vm.prank(trader);
+        p2.buy(id, 1e18, type(uint256).max); // reverts (quoteBuy calls math directly, no try/catch)
+
+        sw.setDown(false);
+        uint256 navRestored = p2.totalAssets();
+        assertGt(navRestored, navConservative, "MtM NAV restored once math is back");
+    }
+
+    /// I-2: fractional (non-whole-USDG) strikes are rejected at listing time.
+    function test_fractional_strike_rejected() public {
+        lpDeposit(1_000_000e6);
+        uint128[] memory ks = new uint128[](1);
+        ks[0] = uint128(4000.5e18);
+        vm.expectRevert(EquinoxPool.BadStrike.selector);
+        pool.createBoard(uint64(T0 + WEEK), ks);
+    }
+
+    /// I-3: admin levers are bounded (heartbeat, sequencerGrace, settleBounty) and treasury can never be zero.
+    function test_config_bounds_and_treasury() public {
+        EquinoxPool.Config memory c = deployParams(address(mathSol)).cfg;
+        c.heartbeat = 2 days;
+        vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 4));
+        pool.setConfig(c);
+
+        c = deployParams(address(mathSol)).cfg;
+        c.sequencerGrace = 2 days;
+        vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 9));
+        pool.setConfig(c);
+
+        c = deployParams(address(mathSol)).cfg;
+        c.settleBounty = 101e6;
+        vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 10));
+        pool.setConfig(c);
+
+        vm.expectRevert(EquinoxPool.ZeroAddress.selector);
+        pool.setTreasury(address(0));
+
+        EquinoxPool.Deploy memory d = deployParams(address(mathSol));
+        d.treasury = address(0);
+        vm.expectRevert(EquinoxPool.ZeroAddress.selector);
+        factory.createPool(d);
+    }
+
+    /// ITM put settlement + claim on a non-ATM strike (regression coverage alongside the ITM call scenarios).
+    function test_itm_put_settle_and_claim() public {
+        lpDeposit(1_000_000e6);
+        (uint256 boardId, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 3800e18, false);
+        traderBuy(id, 5e18);
+        vm.warp(expiry);
+        tick(3500e8);
+        pool.settle(boardId);
+        (, , , , , , , uint256 payoutPerUnit) = pool.series(id);
+        assertEq(payoutPerUnit, 300e18);
+        vm.prank(trader);
+        uint256 got = pool.claim(id, 5e18);
+        assertEq(got, 1500e6);
+        assertEq(pool.reserved(), 0);
+        assertEq(pool.escrowedPayouts(), 0);
+    }
+
+    /// quoteClose recomputed independently against the formula (mirrors test_buy_premium_matches_formula for close).
+    function test_quoteClose_matches_formula() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4200e18, true);
+        traderBuy(id, 10e18);
+
+        uint256 size = 5e18;
+        (, , , , , uint256 oi, uint256 vegaAcc, ) = pool.series(id);
+        uint256 rel = vegaAcc * size / oi;
+        uint256 capital = usdg.balanceOf(address(pool)) * 1e12;
+        uint256 vegaCap = capital * 500 / 10_000;
+        uint256 netVegaAfter = pool.netVega() - rel;
+        uint256 util = netVegaAfter * WAD / vegaCap;
+        uint256 sigmaClose = vol.sigmaMark(util) * (WAD - 0.05e18) / WAD;
+        uint256 t = uint256(WEEK) * WAD / 31_536_000;
+        (uint256 p, , ) = mathSol.cappedCall(4000e18, 4200e18, 8400e18, t, sigmaClose, 0);
+        uint256 proceeds = (p * size / WAD) / 1e12;
+
+        (uint256 qProceeds, uint256 qSigma, ) = pool.quoteClose(id, size);
+        assertEq(qProceeds, proceeds, "proceeds");
+        assertEq(qSigma, sigmaClose, "sigma");
+    }
+
+    /// Settling an unknown board id reverts cleanly instead of a raw array out-of-bounds panic.
+    function test_settle_unknown_board() public {
+        vm.expectRevert(EquinoxPool.BoardUnknown.selector);
+        pool.settle(99);
     }
 }
