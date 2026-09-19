@@ -3,7 +3,7 @@
 **Produk:** Equinox — options AMM dengan penetapan harga Black-Scholes sepenuhnya on-chain (Arbitrum Stylus), settlement USDG
 **Chain:** Arbitrum Sepolia `421614` (demo) → Arbitrum One `42161` (produksi). Stylus aktif di keduanya.
 **Event:** Arbitrum Open House Singapore: Online Buildathon (submission 4 Okt 2026)
-**Versi:** 1.1 — 19 September 2026 (menggantikan draft §2.1–2.2; v1.1 memuat hasil benchmark terukur dan mencabut klaim 10×)
+**Versi:** 1.2 — 19 September 2026 (v1.1 + rekonsiliasi benchmark dengan build repo; §6.6 diselaraskan dengan §9.5)
 **Status:** draft implementasi. Angka model di §6 diverifikasi numerik (Python) dan menjadi vektor uji. Pustaka Rust `bs-math`, program Stylus, dan kontrol Solidity **sudah dibangun, diuji bit-identik, dideploy ke devnode ArbOS 61/Stylus v3, dan diukur** (§13) — V2–V5 dan V10 §18 terverifikasi. Alamat feed/USDG dan rubrik juri masih wajib diverifikasi Hari 1.
 
 ---
@@ -338,7 +338,7 @@ Rentang **3–20 evaluasi BS per solve** adalah angka yang dipakai di §2.1 (P2)
 | `Φ` | **Cody (1969)** erf/erfc rasional Chebyshev, tiga rentang (\|x\| < 0,5; 0,5–4; > 4); `Φ(x) = ½·erfc(−x/√2)` | ≤ 1e-12 absolut dalam WAD (double: ~1e-16) |
 | `φ` | `exp(−x²/2) / √(2π)` | mengikuti `exp` |
 | Domain | `S, K ∈ [1e-6, 1e12]·WAD`; `T ∈ [60 s, 365 h]`; `σ ∈ [1%, 500%]`; `\|d\| > 8` → Φ = 0/1 tanpa revert; input di luar batas → revert (FR-9) | — |
-| Perkalian | 512-bit intermediate (`mul_div` / `widening_mul` dari `ruint`; verifikasi API di versi SDK yang dipakai, V4) | tanpa overflow diam-diam |
+| Perkalian | checked_mul 256-bit lalu bagi — cukup karena domain membatasi \|a·b\| < 2^255 (analisis §9.5); tidak perlu intermediate 512-bit | tanpa overflow diam-diam |
 | Pembulatan | premi ↑, proceeds/payout ↓; konversi WAD → 6 desimal di boundary pool | FR-35 |
 
 Kenapa bukan A&S 26.2.17 (yang lazim di Solidity)? Bukan karena presisinya buruk (§6.7 menunjukkan < 1% relatif sampai d = −6), melainkan karena di Stylus **tidak ada alasan gas** untuk memilih 1e-7 ketika 1e-15 tersedia dengan biaya yang tidak lagi menentukan desain. Kontrol `BlackScholesSol.sol` memakai algoritma yang **sama** (Cody) agar perbandingan gas apples-to-apples; harga kedua implementasi harus sepakat ≤ 1e-9 relatif (INV-12).
@@ -680,14 +680,14 @@ Men-deploy `EquinoxOptionToken` + `EquinoxVolEngine` + `EquinoxPool` dalam satu 
 | Aktivasi | `cargo stylus deploy` men-deploy **dan** mengaktivasi; aktivasi mengompilasi WASM → native di node dan membayar fee data | Catat biaya aktivasi aktual di §13 |
 | Kedaluwarsa | Program harus di-*keepalive* dalam `expiryDays` (default 365) — permissionless via precompile `ArbWasm` (`0x…71`) | Runbook tahunan; siapa pun boleh membayar |
 | Upgrade Stylus | Saat versi Stylus naik lewat upgrade ArbOS, program **harus diaktivasi ulang** sebelum bisa dipanggil | Permissionless (`activateProgram`); pool tidak butuh governance untuk pulih (FR-34). Sampai diaktivasi, semua yang butuh kuotasi (`buy`, `close`, `deposit`) revert; `claim` dan `withdraw` konservatif tetap jalan (FR-36) → T7 |
-| Cache | `CacheManager` (lelang slot cache) menurunkan biaya inisialisasi program: `programInitGas` **31.333 → 4.961 gas** untuk program ini (terukur via `ArbWasm`) | Produksi di Arbitrum One: `cargo stylus cache bid <addr> 0`. Devnode resmi hanya punya stub CacheManager (bid "sukses" tapi `codehashIsCached` = false) — angka cached di §13 adalah turunan, ditandai |
+| Cache | `CacheManager` (lelang slot cache) menurunkan biaya inisialisasi program: `programInitGas` **31.333 → 4.961 gas** (build spike; build repo yang di-commit: lihat docs/BENCHMARK.md) untuk program ini (terukur via `ArbWasm`) | Produksi di Arbitrum One: `cargo stylus cache bid <addr> 0`. Devnode resmi hanya punya stub CacheManager (bid "sukses" tapi `codehashIsCached` = false) — angka cached di §13 adalah turunan, ditandai |
 
 ### 9.4 Gas, ink, batas ukuran
 - Metering internal Stylus memakai **ink**; `1 gas = 10.000 ink` (default `ink_price`). Semua angka yang dilaporkan ke pengguna tetap **gas**. Jangan pernah menulis "lebih murah karena ink".
 - Sumber penghematan yang **terukur** (§13): alur kontrol, loop, pemanggilan fungsi, dan ABI — bukan aritmetika. `I256` (ruint) 105 gas per pasangan mul+div vs EVM ~35; `i128` 29; `u64` 0,5. Klaim dokumentasi "~10× komputasi" berlaku untuk aritmetika lebar-sempit dan memori, tidak untuk fixed-point 256-bit.
 - Batas: 24 KB terkompresi (brotli) per fragmen; cargo-stylus 0.10 memecah program lebih besar menjadi **fragmen** (maks `getMaxStylusContractFragments()` = 4 di Sepolia/ArbOS 61). `bs-stylus`: 34,3 KB → 2 fragmen (opt-level 3) atau 25,8 KB (opt-level "z", ~25% lebih lambat). Fragmen butuh **Stylus v3 / ArbOS ≥ 61** — devnode resmi (v3.11.4) lahir di ArbOS 59 dan harus di-upgrade (`ArbOwner.scheduleArbOSUpgrade(61, 0)` oleh chain owner dev). `wasm-opt -Oz` hanya menghemat 0,7 KB dan hasilnya ditolak aktivasi — **jangan pakai**.
 - Memori dibayar per halaman WASM 64 KB (`pageGas` = 1.000 gas/halaman) **pada setiap panggilan**. Stack default Rust 1 MiB = 17 halaman = 17.000 gas per panggilan sia-sia. Wajib: `.cargo/config.toml` dengan `-C link-arg=-zstack-size=16384` → `programMemoryFootprint` = 1 halaman (terukur: `ln` 49,5k → 34,4k gas).
-- Biaya tetap per panggilan (terukur): `programInitGas` 31.333 gas tanpa cache / 4.961 cached + `CALL` + ABI ≈ 3k. Panggilan tunggal `ln`/`exp`/`normCdf` di Stylus ≈ 34–36k tanpa cache, ≈ 8–9k cached, vs 3,5–6k di Solidity. **Batch (FR-8) bukan optimasi opsional — ia syarat agar Stylus menang.**
+- Biaya tetap per panggilan (terukur): `programInitGas` 31.333 gas tanpa cache / 4.961 cached (build spike; build repo yang di-commit: lihat docs/BENCHMARK.md) + `CALL` + ABI ≈ 3k. Panggilan tunggal `ln`/`exp`/`normCdf` di Stylus ≈ 34–36k tanpa cache, ≈ 8–9k cached, vs 3,5–6k di Solidity. **Batch (FR-8) bukan optimasi opsional — ia syarat agar Stylus menang.**
 
 ### 9.5 Determinisme & numerik
 - **Hanya integer.** `I256`/`U256` dari `alloy-primitives` (re-export SDK). Stylus VM **tidak mendukung floating point** (README SDK: "floating point and SIMD, which the Stylus VM does not yet support"); tidak ada `f64` di jalur mana pun.
@@ -810,6 +810,8 @@ Target: **≥ 90% line coverage** pada `EquinoxPool`, `EquinoxVolEngine`, `Black
 Urutan yang dijalankan pada keduanya dengan input identik, mencetak tabel:
 
 **Hasil terukur (19 Sep 2026).** Lingkungan: `nitro-devnode` image `offchainlabs/nitro-node:v3.11.4-7d5ac27`, di-upgrade ke ArbOS 61 (Stylus v3), L1 fee = 0; `cargo-stylus`/`stylus-sdk` 0.10.9, rustc 1.92, `opt-level = 3`, stack 16 KiB, 2 fragmen; kontrol `solc 0.8.28` via-IR, optimizer 200 runs, PRBMath v4.1.0. Pengukuran = `gasleft()` di sekitar `STATICCALL` dari harness `Bench.sol` (termasuk overhead panggilan & inisialisasi program). Kolom "cached" = terukur − (31.333 − 4.961) dari `ArbWasm.programInitGas` (turunan; CacheManager devnode adalah stub). Semua keluaran bit-identik antara A dan B (Δharga = 0).
+
+**Sumber kanonik.** Tabel di bawah adalah pengukuran build spike 19 Sep 2026. Untuk build yang di-commit di repo, angka kanoniknya adalah docs/BENCHMARK.md (keluaran tools/bench/bench.sh); selisihnya ≤ ~2% pada kolom terukur karena ukuran WASM sedikit berbeda, dan kesimpulan (2,6–2,9× pada lingkaran, < 1× panggilan tunggal tanpa cache, aritmetika 256-bit 3× lebih mahal dari EVM) tidak berubah.
 
 | Operasi | Solidity (kontrol) | Stylus tanpa cache | Stylus cached (turunan) | Rasio cached |
 |---|---|---|---|---|
