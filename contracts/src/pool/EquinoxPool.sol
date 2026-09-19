@@ -93,6 +93,15 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     uint256 public reserved;         // WAD USDG: Σ OI × K seri terbuka
     uint256 public escrowedPayouts;  // WAD USDG: payout pasti menunggu claim
     uint256 public netVega;          // WAD per 1,00 vol
+    /// @notice Referensi kapital yang di-lag untuk util/cap (bukan untuk NAV atau withdraw). `capitalRefPrev` adalah
+    ///         snapshot kapital dari sebelum jendela `CAPITAL_REF_DELAY` saat ini; `_capitalForCaps` memakai
+    ///         `min(live, capitalRefPrev)`, sehingga deposit baru baru "dihitung" oleh util/vegaCap setelah usianya
+    ///         ≥ CAPITAL_REF_DELAY. Tanpa ini, deposit besar bisa mengencerkan util secara instan lalu buy murah/close
+    ///         mahal di blok yang sama (R2-a) — penarikan tetap dihitung segera lewat sisi `live` dari `min`.
+    uint256 public capitalRefPrev;
+    uint256 public capitalRefCur;
+    uint64 public capitalRefAt;
+    uint64 public constant CAPITAL_REF_DELAY = 1 days;
     mapping(uint256 => Series) public series;
     Board[] internal _boards;
     uint256[] internal _openSeriesIds;
@@ -166,18 +175,42 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     /// @dev Menolak deposit/mint saat `vol`/`math` sedang gagal — mencegah mint pada NAV konservatif lalu redeem
     ///      pada NAV MtM begitu math pulih (I-1b). Withdraw/redeem tetap berjalan di atas NAV konservatif.
+    ///      Me-refresh referensi kapital (R2-a) & poke vol engine (R2-b) sebelum apa pun lain; deposit/mint pertama
+    ///      langsung membootstrap referensi kapital agar LP pertama dihitung seketika, bukan setelah lag.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        _refreshCapitalRef();
+        _pokeVol();
         _requireFresh();
         (, bool conservative) = _liabilityWad();
         if (conservative) revert MathUnavailable();
-        return super.deposit(assets, receiver);
+        uint256 shares = super.deposit(assets, receiver);
+        _bootstrapCapitalRef();
+        return shares;
     }
 
     function mint(uint256 shares, address receiver) public override returns (uint256) {
+        _refreshCapitalRef();
+        _pokeVol();
         _requireFresh();
         (, bool conservative) = _liabilityWad();
         if (conservative) revert MathUnavailable();
-        return super.mint(shares, receiver);
+        uint256 assets = super.mint(shares, receiver);
+        _bootstrapCapitalRef();
+        return assets;
+    }
+
+    /// @dev Refresh referensi kapital (R2-a) & poke vol engine (R2-b) sebelum delegasi; withdraw/redeem tidak
+    ///      pernah dijeda dan tidak pernah butuh `math`/`vol` sukses (NAV konservatif tetap dipakai bila gagal).
+    function withdraw(uint256 assets, address receiver, address owner_) public override returns (uint256) {
+        _refreshCapitalRef();
+        _pokeVol();
+        return super.withdraw(assets, receiver, owner_);
+    }
+
+    function redeem(uint256 shares, address receiver, address owner_) public override returns (uint256) {
+        _refreshCapitalRef();
+        _pokeVol();
+        return super.redeem(shares, receiver, owner_);
     }
 
     /// @notice Penarikan dibatasi likuiditas bebas: cash − escrow − reserved (FR-32). Tetap jalan saat stale (NAV konservatif).
@@ -242,18 +275,23 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         uint256 spotWad;
     }
 
-    /// @notice Kuotasi beli: σ_buy = σ_mark(util setelah trade) × (1 + spread); premi ≥ floor (FR-13, FR-14, FR-23).
+    /// @notice Kuotasi beli: σ_buy = σ_mark(util setelah trade) × (1 ± spread); premi ≥ floor (FR-13, FR-14, FR-23).
     /// @dev `q.vegaTotal` dihitung pada σ_buy (setelah dampak inventaris + spread), bukan σ_mark mid — sengaja
-    ///      konservatif (lebih besar) untuk pembukuan `netVega`/vega cap di `buy`.
+    ///      konservatif (lebih besar) untuk pembukuan `netVega`/vega cap di `buy`. Arah spread mengikuti tanda vega
+    ///      unit pada σ_now: `+spread` bila vega ≥ 0 (kasus normal), `−spread` bila negatif (capped call dekat S/2
+    ///      pada σ tinggi — R2-c), agar `quoteClose < quoteBuy` tetap benar di kedua kasus.
     function quoteBuy(uint256 seriesId, uint256 size) public view returns (QuoteOut memory q) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
         uint256 t = _years(sr.expiry);
         uint256 sigmaNow = vol.sigmaMark(_util(netVega));
-        (, , uint256 vegaUnit) = _price(s, sr.strike, t, sigmaNow, sr.isCall);
-        uint256 vegaTotal = vegaUnit * size / WAD;
-        uint256 sigmaBuy = vol.sigmaMark(_util(netVega + vegaTotal)) * (WAD + vol.spread()) / WAD;
-        (uint256 p, int256 delta, uint256 vegaBuy) = _price(s, sr.strike, t, sigmaBuy, sr.isCall);
+        (, , int256 vegaUnit) = _price(s, sr.strike, t, sigmaNow, sr.isCall);
+        uint256 vegaTotal = (vegaUnit > 0 ? uint256(vegaUnit) : 0) * size / WAD;
+        bool posVega = vegaUnit >= 0;
+        uint256 spread = vol.spread();
+        uint256 sigmaBuy = vol.sigmaMark(_util(netVega + vegaTotal)) * (posVega ? (WAD + spread) : (WAD - spread)) / WAD;
+        (uint256 p, int256 delta, int256 vegaBuySigned) = _price(s, sr.strike, t, sigmaBuy, sr.isCall);
+        uint256 vegaBuy = vegaBuySigned > 0 ? uint256(vegaBuySigned) : 0;
         uint256 premiumWad = p * size / WAD;
         uint256 floorWad = uint256(sr.strike) * size / WAD * cfg.minPremiumBps / 10_000;
         if (premiumWad < floorWad) premiumWad = floorWad;
@@ -265,13 +303,19 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         q.spotWad = s;
     }
 
-    /// @notice Kuotasi tutup: σ_close = σ_mark(util setelah tutup) × (1 − spread); proceeds dibulatkan ke bawah.
+    /// @notice Kuotasi tutup: σ_close = σ_mark(util setelah tutup) × (1 ∓ spread); proceeds dibulatkan ke bawah.
+    /// @dev Arah spread mengikuti tanda vega unit pada σ_now (sama seperti `quoteBuy`, dihitung ulang di sini):
+    ///      `−spread` bila vega ≥ 0, `+spread` bila negatif — menjamin `quoteClose < quoteBuy` di kedua kasus (R2-c).
     function quoteClose(uint256 seriesId, uint256 size) public view returns (uint256 proceedsAssets, uint256 sigmaClose, uint256 spotWad) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
         uint256 t = _years(sr.expiry);
         uint256 rel = _vegaRelease(sr, size);
-        sigmaClose = vol.sigmaMark(_util(netVega - rel)) * (WAD - vol.spread()) / WAD;
+        uint256 sigmaNow = vol.sigmaMark(_util(netVega));
+        (, , int256 vegaUnit) = _price(s, sr.strike, t, sigmaNow, sr.isCall);
+        bool posVega = vegaUnit >= 0;
+        uint256 spread = vol.spread();
+        sigmaClose = vol.sigmaMark(_util(netVega - rel)) * (posVega ? (WAD - spread) : (WAD + spread)) / WAD;
         (uint256 p, , ) = _price(s, sr.strike, t, sigmaClose, sr.isCall);
         proceedsAssets = (p * size / WAD) / assetScale;
         spotWad = s;
@@ -281,12 +325,14 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     /// @dev `maxPremiumAssets` adalah batas slippage atas premi + fee (total yang ditransfer dari trader); nilai
     ///      kembalian (`premiumAssets`) hanya premi, tanpa fee.
     function buy(uint256 seriesId, uint256 size, uint256 maxPremiumAssets) external nonReentrant returns (uint256 premiumAssets) {
+        _refreshCapitalRef();
+        _pokeVol();
         if (tradingPaused) revert TradingIsPaused();
         if (size < cfg.minSize) revert SizeTooSmall();
         Series storage sr = _openSeries(seriesId);
         QuoteOut memory q = quoteBuy(seriesId, size);
         if (q.premiumAssets + q.feeAssets > maxPremiumAssets) revert SlippageExceeded();
-        uint256 capital = _capitalWad();
+        uint256 capital = _capitalForCaps();
         uint256 addReserve = uint256(sr.strike) * size / WAD;
         if (reserved + addReserve > capital * cfg.maxUtilBps / 10_000) revert UtilizationExceeded();
         if (netVega + q.vegaTotal > capital * cfg.vegaCapBps / 10_000) revert VegaCapExceeded();
@@ -303,6 +349,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     /// @notice Tutup `size` unit sebelum expiry; tidak pernah dijeda (FR-22, FR-33).
     function close(uint256 seriesId, uint256 size, uint256 minProceedsAssets) external nonReentrant returns (uint256 proceedsAssets) {
+        _refreshCapitalRef();
+        _pokeVol();
         Series storage sr = _openSeries(seriesId);
         if (size == 0 || size > sr.oi) revert SizeTooSmall();
         uint256 sigmaClose;
@@ -323,6 +371,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     /// @notice Permissionless setelah expiry; memakai round Chainlink dengan `updatedAt ≥ expiry` yang masih segar (FR-27..29).
     function settle(uint256 boardId) external nonReentrant {
+        _refreshCapitalRef();
+        _pokeVol();
         if (boardId >= _boards.length) revert BoardUnknown();
         Board storage b = _boards[boardId];
         if (b.settled) revert BoardAlreadySettled();
@@ -400,6 +450,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     function board(uint256 boardId) external view returns (uint64 expiry, bool settled, uint256 settlementPrice, uint256[] memory seriesIds) {
+        if (boardId >= _boards.length) revert BoardUnknown();
         Board storage b = _boards[boardId];
         return (b.expiry, b.settled, b.settlementPrice, b.seriesIds);
     }
@@ -466,22 +517,62 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     /// @dev util_vega = clamp(netVega / vegaCap, 0, 1); pool kosong → 1 (harga maksimal, dan buy tetap ditolak oleh cap).
+    ///      Memakai `_capitalForCaps()` (kapital yang di-lag, R2-a), bukan kapital live.
     function _util(uint256 vega) internal view returns (uint256) {
-        uint256 cap = _capitalWad() * cfg.vegaCapBps / 10_000;
+        uint256 cap = _capitalForCaps() * cfg.vegaCapBps / 10_000;
         if (cap == 0) return WAD;
         uint256 u = vega * WAD / cap;
         return u > WAD ? WAD : u;
     }
 
-    /// @dev Harga & Greeks satu unit: call = spread ter-cap C(K) − C(2K); put = BS biasa.
-    function _price(uint256 s, uint256 k, uint256 t, uint256 sigma, bool isCall) internal view returns (uint256 p, int256 delta, uint256 vega) {
+    /// @dev Harga & Greeks satu unit: call = spread ter-cap C(K) − C(2K); put = BS biasa. Vega dikembalikan
+    ///      bertanda (bisa negatif untuk capped call dekat S/2 pada σ tinggi, R2-c) — pemanggil yang memutuskan
+    ///      klem ke 0 untuk pembukuan vs. memakai tandanya untuk arah spread.
+    function _price(uint256 s, uint256 k, uint256 t, uint256 sigma, bool isCall) internal view returns (uint256 p, int256 delta, int256 vega) {
         if (isCall) {
-            int256 v;
-            (p, delta, v) = math.cappedCall(s, k, k * CAP_MULT / WAD, t, sigma, rWad);
-            vega = v > 0 ? uint256(v) : 0;
+            (p, delta, vega) = math.cappedCall(s, k, k * CAP_MULT / WAD, t, sigma, rWad);
         } else {
-            (p, delta, , vega, ) = math.quote(s, k, t, sigma, rWad, false);
+            uint256 vegaU;
+            (p, delta, , vegaU, ) = math.quote(s, k, t, sigma, rWad, false);
+            vega = int256(vegaU);
         }
+    }
+
+    /// @dev Referensi kapital yang dipakai util/cap: `min(live, capitalRefPrev)` (R2-a). Sisi `live` membuat
+    ///      penarikan langsung mengurangi kapasitas trading; sisi `capitalRefPrev` membuat deposit baru hanya
+    ///      menambah kapasitas setelah ia sempat "diam" selama ≥ CAPITAL_REF_DELAY.
+    function _capitalForCaps() internal view returns (uint256) {
+        uint256 live = _capitalWad();
+        return live < capitalRefPrev ? live : capitalRefPrev;
+    }
+
+    /// @dev Menggeser jendela referensi kapital sekali per ≥ CAPITAL_REF_DELAY; dipanggil sebagai baris pertama
+    ///      `buy`/`close`/`settle`/`deposit`/`mint`/`withdraw`/`redeem` (R2-a).
+    function _refreshCapitalRef() internal {
+        if (capitalRefAt != 0 && block.timestamp - capitalRefAt >= CAPITAL_REF_DELAY) {
+            capitalRefPrev = capitalRefCur;
+            capitalRefCur = _capitalWad();
+            capitalRefAt = uint64(block.timestamp);
+        }
+    }
+
+    /// @dev Menetapkan referensi kapital pertama kali (LP pertama dihitung seketika, bukan setelah lag); dipanggil
+    ///      setelah `super.deposit`/`super.mint` agar kapital yang di-snapshot sudah termasuk dana yang baru masuk.
+    function _bootstrapCapitalRef() internal {
+        if (capitalRefAt == 0) {
+            uint256 c = _capitalWad();
+            capitalRefPrev = c;
+            capitalRefCur = c;
+            capitalRefAt = uint64(block.timestamp);
+        }
+    }
+
+    /// @dev Poke observasi vol engine (R2-b), best-effort: `EquinoxVolEngine.sigmaBase()`/`poke()` menyentuh `math`
+    ///      bahkan di jalur "tidak ada round baru", jadi dibungkus try/catch — kegagalan di sini tidak boleh
+    ///      memblokir `withdraw`/`redeem`/`close`/`claim`, atau membocorkan revert mentah `math` alih-alih
+    ///      `MathUnavailable` yang sudah ditangani `_liabilityWad` (I-1).
+    function _pokeVol() internal {
+        try vol.poke() {} catch {}
     }
 
     /// @dev Pelepasan vega proporsional terhadap OI yang ditutup.

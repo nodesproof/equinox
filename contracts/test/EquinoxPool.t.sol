@@ -495,7 +495,10 @@ contract EquinoxPoolTest is PoolFixture {
         uint256 size = 5e18;
         (, , , , , uint256 oi, uint256 vegaAcc, ) = pool.series(id);
         uint256 rel = vegaAcc * size / oi;
-        uint256 capital = usdg.balanceOf(address(pool)) * 1e12;
+        // R2-a: util/cap pricing uses the lagged capital reference, not live cash -- still pinned at the
+        // bootstrapped 1M since no CAPITAL_REF_DELAY window has elapsed in this test.
+        assertEq(pool.capitalRefPrev(), 1_000_000e18);
+        uint256 capital = 1_000_000e18;
         uint256 vegaCap = capital * 500 / 10_000;
         uint256 netVegaAfter = pool.netVega() - rel;
         uint256 util = netVegaAfter * WAD / vegaCap;
@@ -513,5 +516,145 @@ contract EquinoxPoolTest is PoolFixture {
     function test_settle_unknown_board() public {
         vm.expectRevert(EquinoxPool.BoardUnknown.selector);
         pool.settle(99);
+    }
+
+    // ------------------------------------------------------------ fix round 2 (security re-review)
+
+    /// R2-a: deposit-dilution sandwich (deposit huge -> buy/close at diluted util -> redeem) must not profit, and
+    /// the live-capital util/cap bypass at buy time must be closed by the capital-ref lag. The trader's setup uses
+    /// 4x45 (not 4x50 as in test_scenario2) so that ~80k WAD of headroom remains under the 80% cap of the lagged
+    /// 1M capital: enough for the attacker's 5e18 probe to fit, not enough for the 40e18 exploit-sized attempt.
+    function test_dilution_sandwich_cannot_profit() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 idC4000 = sid(expiry, 4000e18, true);
+        for (uint256 i = 0; i < 4; i++) traderBuy(idC4000, 45e18); // reserved = 720k, headroom = 80k to the 800k cap
+
+        uint256 idC4200 = sid(expiry, 4200e18, true);
+        address attacker = makeAddr("dilutionAttacker");
+        usdg.mint(attacker, 20_000_000e6);
+        vm.startPrank(attacker);
+        usdg.approve(address(pool), type(uint256).max);
+        uint256 shares = pool.deposit(20_000_000e6, attacker);
+
+        vm.expectRevert(EquinoxPool.UtilizationExceeded.selector);
+        pool.buy(idC4200, 40e18, type(uint256).max); // capital for caps is still the lagged 1M, not diluted live cash
+
+        // Undilute first: redeem all LP shares before trading the option, so the small trade's spread-profit
+        // accrues to the (now sole) original LP rather than being partly recaptured by the attacker's own
+        // redeem -- isolating the R2-a property (mispriced buy/close via util manipulation) from that unrelated
+        // large-depositor-owns-most-of-the-NAV effect. capitalForCaps was pinned at 1M throughout regardless
+        // (min(live, capitalRefPrev), and capitalRefPrev never ages within this single block either way).
+        pool.redeem(shares, attacker, attacker);
+        pool.buy(idC4200, 5e18, type(uint256).max); // fits inside the remaining ~80k headroom, paid from redeemed cash
+        pool.close(idC4200, 5e18, 0);
+        vm.stopPrank();
+
+        assertLt(usdg.balanceOf(attacker), 20_000_000e6, "dilution sandwich must not profit");
+    }
+
+    /// R2-a: the capital-ref lag is an observable two-step delay matching CAPITAL_REF_DELAY, not just a
+    /// single-buy trick -- a same-block deposit never moves capitalRefPrev/pricing; it takes two aged refreshes.
+    function test_capital_lag_after_delay() public {
+        lpDeposit(1_000_000e6);
+        assertEq(pool.capitalRefPrev(), 1_000_000e18);
+        assertEq(pool.capitalRefCur(), 1_000_000e18);
+
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4200e18, true);
+        traderBuy(id, 10e18); // nonzero netVega so sigmaMarkNow() actually depends on capital-for-caps
+
+        uint256 sigmaBefore = pool.sigmaMarkNow();
+
+        address lp2 = makeAddr("lp2");
+        usdg.mint(lp2, 2_000_000e6);
+        vm.startPrank(lp2);
+        usdg.approve(address(pool), type(uint256).max);
+        pool.deposit(2_000_000e6, lp2);
+        vm.stopPrank();
+
+        // Same block: the reference hasn't aged past CAPITAL_REF_DELAY -- pricing/util still see the original 1M.
+        assertEq(pool.capitalRefPrev(), 1_000_000e18, "unchanged same-block as the 2M deposit");
+        assertEq(pool.sigmaMarkNow(), sigmaBefore, "quote unaffected by the same-block deposit");
+
+        vm.warp(T0 + 1 days);
+        tick(4000e8); // keep the oracle fresh across the warp (unchanged price)
+        // ~3M plus the trader's earlier premium, which is already sitting in pool cash by this point.
+        uint256 liveBeforeDust1 = usdg.balanceOf(address(pool)) * 1e12;
+        assertGt(liveBeforeDust1, 3_000_000e18, "sanity: includes the trader's premium on top of the two deposits");
+        address dust1 = makeAddr("dust1");
+        usdg.mint(dust1, 1e6);
+        vm.startPrank(dust1);
+        usdg.approve(address(pool), type(uint256).max);
+        pool.deposit(1e6, dust1); // any state-changing call triggers the refresh, as its first statement
+        vm.stopPrank();
+        assertEq(pool.capitalRefCur(), liveBeforeDust1, "cur snapshot taken just before this call's own deposit landed");
+        assertEq(pool.capitalRefPrev(), 1_000_000e18, "prev still lags one window behind");
+        // (sigmaMarkNow is not compared past this point: tick()'s own poke() legitimately decays varWad each
+        // window even at an unchanged price, so it's no longer isolating the capital-lag effect alone.)
+
+        vm.warp(T0 + 2 days);
+        tick(4000e8); // keep the oracle fresh across the warp (unchanged price)
+        address dust2 = makeAddr("dust2");
+        usdg.mint(dust2, 1e6);
+        vm.startPrank(dust2);
+        usdg.approve(address(pool), type(uint256).max);
+        pool.deposit(1e6, dust2);
+        vm.stopPrank();
+        assertEq(pool.capitalRefPrev(), liveBeforeDust1, "advanced to the previous cur after the second delay + call");
+    }
+
+    /// R2-b: buy must poke the vol engine forward when a fresh round is available (PRD Section 8.4 step 3), not
+    /// leave realized vol stale until someone calls poke() separately.
+    function test_buy_pokes_vol_engine() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4200e18, true);
+
+        uint80 roundBefore = vol.lastRoundId();
+        uint256 varBefore = vol.varWad();
+
+        feed.set(4100e8, block.timestamp + 120);
+        vm.warp(block.timestamp + 120);
+        traderBuy(id, 1e18);
+
+        assertGt(vol.lastRoundId(), roundBefore, "buy pokes the vol engine to the new round");
+        assertTrue(vol.varWad() != varBefore, "varWad updates from the new observation");
+    }
+
+    /// R2-c: the spread must always work against the trader (quoteClose < quoteBuy) even where the capped call's
+    /// unit vega is negative (K near S/2 at high sigma) -- unconditionally using (1+spread) for buy / (1-spread)
+    /// for close could invert the spread's protective direction in that regime.
+    function test_spread_direction_follows_vega_sign() public {
+        EquinoxPool.Deploy memory d = deployParams(address(mathSol));
+        d.sigmaSeed = 2.5e18;
+        EquinoxPool p2 = EquinoxPool(factory.createPool(d));
+        vm.prank(lp);
+        usdg.approve(address(p2), type(uint256).max);
+        vm.prank(lp);
+        p2.deposit(1_000_000e6, lp);
+
+        uint64 expiry = uint64(T0 + 4 * WEEK);
+        uint128[] memory ks = new uint128[](1);
+        ks[0] = 2000e18; // = S/2, where the capped-call spread's unit vega can go negative at high sigma
+        p2.createBoard(expiry, ks);
+        uint256 id = p2.token().seriesId(address(p2), expiry, 2000e18, true);
+
+        uint256 t = uint256(4 * WEEK) * WAD / 31_536_000;
+        uint256 sigmaNow = p2.sigmaMarkNow();
+        (, , int256 vegaUnit) = mathSol.cappedCall(4000e18, 2000e18, 4000e18, t, sigmaNow, 0);
+        assertLt(vegaUnit, 0, "unit vega must be negative at this K/sigma to exercise R2-c");
+
+        EquinoxPool.QuoteOut memory qb = p2.quoteBuy(id, 1e18);
+        (uint256 qcProceeds, , ) = p2.quoteClose(id, 1e18);
+        assertLt(qcProceeds, qb.premiumAssets, "quoteClose < quoteBuy even with negative unit vega");
+
+        // Sanity: the same property holds for a normal ATM series (positive vega) too.
+        lpDeposit(1_000_000e6);
+        (, uint64 expiryAtm, ) = listBoard7d();
+        uint256 idAtm = sid(expiryAtm, 4200e18, true);
+        EquinoxPool.QuoteOut memory qbAtm = pool.quoteBuy(idAtm, 1e18);
+        (uint256 qcAtmProceeds, , ) = pool.quoteClose(idAtm, 1e18);
+        assertLt(qcAtmProceeds, qbAtm.premiumAssets, "quoteClose < quoteBuy for a normal ATM series too");
     }
 }
