@@ -84,7 +84,7 @@ Dari wallet owner: `usdg.approve` kedua pool; `deposit(1_000_000e6)` ke masing-m
 Menjalankan narasi identik di A dan B dari wallet owner, mencetak tabel dan menulis `docs/DEMO_LOG.md` (tanggal, blok, tx hash Arbiscan `https://sepolia.arbiscan.io/tx/…`):
 1. `quoteBuy` 10 C 2.800 (board 25 Sep) — cetak premi, σ_buy, Δ, vega, spot untuk A dan B; **assert identik**.
 2. `buy` 10 C 2.800 di A dan B (gas dicetak; rasio).
-3. `quoteBuy` 1 P 2.400 → floor `minPremiumBps × K` vs mid; `buy` 1 P 2.400.
+3. `quoteBuy` 1 P 2.400 → cetak mid vs floor `minPremiumBps × K` (pada S ≈ 2.627 dan 5 hari put ini ≈ 9 % OTM, mid ≈ 11 USDG > floor 1,2 — floor yang menang untuk deep-OTM diperagakan `Narrative.t.sol`); `buy` 1 P 2.400.
 4. `close` 5 C 2.800 di A dan B.
 5. Cetak NAV, `sigmaMarkNow`, `reserved`, `netVega`, `freeLiquidity` A vs B (identik) dan saldo share owner.
 Langkah pasca-settlement (dijalankan terpisah setelah 25 Sep 08:00 UTC, `sepolia-demo.sh --claim`): `claim` seri C 2.800 & P 2.400 (payout sesuai `settlementPrice`), cetak NAV sebelum/sesudah, tambahkan ke `DEMO_LOG.md`.
