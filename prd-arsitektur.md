@@ -3,8 +3,8 @@
 **Produk:** Equinox — options AMM dengan penetapan harga Black-Scholes sepenuhnya on-chain (Arbitrum Stylus), settlement USDG
 **Chain:** Arbitrum Sepolia `421614` (demo) → Arbitrum One `42161` (produksi). Stylus aktif di keduanya.
 **Event:** Arbitrum Open House Singapore: Online Buildathon (submission 4 Okt 2026)
-**Versi:** 1.2 — 19 September 2026 (v1.1 + rekonsiliasi benchmark dengan build repo; §6.6 diselaraskan dengan §9.5)
-**Status:** draft implementasi. Angka model di §6 diverifikasi numerik (Python) dan menjadi vektor uji. Pustaka Rust `bs-math`, program Stylus, dan kontrol Solidity **sudah dibangun, diuji bit-identik, dideploy ke devnode ArbOS 61/Stylus v3, dan diukur** (§13) — V2–V5 dan V10 §18 terverifikasi. Alamat feed/USDG dan rubrik juri masih wajib diverifikasi Hari 1.
+**Versi:** 1.3 — 19 September 2026 (v1.2 + pool terimplementasi & diaudit tiga putaran: NAV di-mark pada σ_mark(0), kapital referensi di-lag untuk util/cap, harga tidak pernah menembus mark (INV-15/16), FR-36 diperjelas, strike kelipatan 1 USDG, batas parameter; §8.3 bindPool, §8.6 factory dua-level & batas 24 KB, §13 baris pool terukur, §12 coverage)
+**Status:** draft implementasi. Angka model di §6 diverifikasi numerik (Python) dan menjadi vektor uji. Pustaka Rust `bs-math`, program Stylus, dan kontrol Solidity **sudah dibangun, diuji bit-identik, dideploy ke devnode ArbOS 61/Stylus v3, dan diukur** (§13) — V2–V5 dan V10 §18 terverifikasi. Pool (`EquinoxPool`, `EquinoxVolEngine`, `EquinoxOptionToken`, `EquinoxFactory`) sudah dibangun, di-fuzz/invariant (§12), dan dijalankan sebagai dua pool identik (kontrol vs Stylus) di devnode (§13). Alamat feed/USDG dan rubrik juri masih wajib diverifikasi Hari 1.
 
 ---
 
@@ -152,17 +152,17 @@ Baris terakhir penting: versi awal dokumen ini sendiri mengasumsikan argumen pre
 |---|---|---|
 | FR-11 | σ_base MUST diturunkan dari EWMA log-return observasi Chainlink yang disimpan on-chain; tidak ada input σ dari admin/oracle di jalur kuotasi | P0 |
 | FR-12 | `poke()` MUST permissionless; MUST mengabaikan observasi dengan `roundId` lama atau Δt < `minObsInterval` | P0 |
-| FR-13 | σ_mark MUST = σ_base × VRP × (1 + α × util_vega), dihitung pada state **setelah** trade | P0 |
-| FR-14 | Harga beli MUST memakai σ_mark × (1 + s); harga tutup MUST memakai σ_mark × (1 − s); s > 0 | P0 |
+| FR-13 | σ_mark MUST = σ_base × VRP × (1 + α × util_vega), dihitung pada state **setelah** trade; `util_vega` memakai **kapital referensi yang di-lag** (`min(kapital live, snapshot berumur ≥ 1 hari)`), bukan kas live — lihat §8.4 "Kapital referensi" | P0 |
+| FR-14 | Harga beli MUST memakai σ_mark × (1 + s) dan harga tutup σ_mark × (1 − s), s > 0 (arah spread mengikuti tanda vega unit pada σ_mark(0) — capped call dekat K = S/2 pada σ tinggi bervega negatif); **per unit, harga beli MUST ≥ harga pada σ_mark(0) dan harga tutup MUST ≤ harga pada σ_mark(0)** — pool tidak pernah bertransaksi menembus mark NAV-nya sendiri (INV-15, INV-16) | P0 |
 | FR-15 | σ MUST di-clamp ke [σ_min, σ_max]; parameter MUST punya batas keras & rate limit perubahan | P0 |
 | FR-16 | Skew per strike `1 + κ·ln(K/S)²` | P1 |
 
 ### 5.3 Pool, board, seri
 | ID | Requirement | Prioritas |
 |---|---|---|
-| FR-17 | Pool MUST ERC-4626 atas USDG; `totalAssets = saldo − escrowedPayouts − markPortfolio()` | P0 |
+| FR-17 | Pool MUST ERC-4626 atas USDG; `totalAssets = saldo − escrowedPayouts − markPortfolio(σ_mark(0))` — MtM pada σ_base × VRP **tanpa** dampak inventaris (D8 direvisi) | P0 |
 | FR-18 | Seri MUST direpresentasikan ERC-1155 (`id = keccak(pool, expiry, strike, isCall)`); mint/burn hanya oleh pool | P0 |
-| FR-19 | Board MUST punya expiry di grid (Jumat 08:00 UTC), tenor ≤ 30 hari; strike dalam [0,5·S, 2·S] saat listing; ≤ 32 seri terbuka per pool | P0 |
+| FR-19 | Board MUST punya expiry di grid (Jumat 08:00 UTC), tenor ≤ 30 hari; strike dalam [0,5·S, 2·S] saat listing; ≤ 32 seri terbuka per pool; strike MUST kelipatan 1 USDG (`K % 1e18 == 0`) agar pelepasan cadangan saat settle eksak | P0 |
 | FR-20 | Listing MUST menolak seri dengan \|Δ\| < `minListingDelta` | P1 |
 
 ### 5.4 Trading
@@ -171,7 +171,7 @@ Baris terakhir penting: versi awal dokumen ini sendiri mengasumsikan argumen pre
 | FR-21 | `buy(series, size, maxPremium)` MUST menagih premi USDG (pembulatan ke atas), mencetak ERC-1155, menambah `reserved += K × size` | P0 |
 | FR-22 | `close(series, size, minProceeds)` MUST membakar token, membayar harga tutup (pembulatan ke bawah), mengurangi `reserved` | P0 |
 | FR-23 | Premi MUST ≥ `minPremiumBps × K × size` (floor risiko model ekor) | P0 |
-| FR-24 | `buy` MUST revert jika `reserved_after > maxUtilBps × (saldo − escrowed)` atau `netVega_after > vegaCap` | P0 |
+| FR-24 | `buy` MUST revert jika `reserved_after > maxUtilBps × kapital referensi (FR-13)` atau `netVega_after > vegaCap` | P0 |
 | FR-25 | Fee `feeBps` atas premi MUST diteruskan ke treasury; spread MUST tinggal di pool (LP) | P0 |
 | FR-26 | Kuotasi MUST revert jika spot stale (> heartbeat × `staleMult`) atau sequencer down / dalam grace period | P0 |
 
@@ -191,7 +191,7 @@ Baris terakhir penting: versi awal dokumen ini sendiri mengasumsikan argumen pre
 | FR-33 | Owner MUST hanya bisa menjeda `buy` dan listing — **tidak pernah** `close`, `claim`, `withdraw`, `settle` | P0 |
 | FR-34 | Alamat `math` MUST immutable per pool; reaktivasi program Stylus permissionless | P0 |
 | FR-35 | Semua konversi WAD ↔ 6 desimal MUST membulatkan ke arah pool (premi ke atas, payout/proceeds ke bawah) | P0 |
-| FR-36 | Saat oracle stale atau panggilan `math` gagal (program tidak aktif), `withdraw` MUST tetap jalan memakai NAV konservatif (`saldo − escrowed − reserved`); `deposit` MUST revert | P0 |
+| FR-36 | Saat oracle stale atau panggilan `math`/`vol` gagal (program tidak aktif), `withdraw`/`redeem` MUST tetap jalan memakai NAV konservatif (`saldo − escrowed − reserved`); `deposit`/`mint` MUST revert — `OracleStale` saat spot stale, `MathUnavailable` saat `vol`/`math` gagal selama ada seri terbuka; `close`, `claim`, `settle` MUST tidak pernah diblokir oleh kegagalan `vol.poke()` (dibungkus try/catch) | P0 |
 | FR-37 | Withdrawal cooldown (request → claim) | P1 |
 
 ---
@@ -277,14 +277,15 @@ EWMA sengaja lamban (λ = 0,94 ≈ memori efektif 16 hari). Reaksi cepat terhada
 **σ_mark — VRP × dampak inventaris (FR-13; mekanisme dikreditkan ke Lyra v1):**
 
 ```
-netVega   = Σ_i OI_i · Vega_i(σ_mark)            (USDG per 1,00 vol; pool short → positif)
-vegaCap   = totalAssets · vegaCapBps / 1e4
+netVega   = Σ_i vegaAcc_i                         (USDG per 1,00 vol; vega yang dibukukan saat trade, pool short → positif)
+vegaCap   = kapitalReferensi · vegaCapBps / 1e4   (kapitalReferensi = min(kas − escrow live, snapshot ≥ 1 hari) — §8.4)
 util_vega = clamp( netVega_setelah_trade / vegaCap , 0 , 1 )
-σ_mark    = σ_base · VRP · (1 + α · util_vega)
-σ_buy     = σ_mark · (1 + s)          σ_close = σ_mark · (1 − s)
+σ_mark(u) = clamp( σ_base · VRP · (1 + α · u) , σ_min , σ_max )
+σ_buy     = σ_mark(util_after) · (1 + s)          σ_close = σ_mark(util_after) · (1 − s)     (tanda s dibalik bila vega unit pada σ_mark(0) < 0)
+p_buy     = max( p(σ_buy) , p(σ_mark(0)) )        p_close = min( p(σ_close) , p(σ_mark(0)) )  (klem ke mark — FR-14, INV-15/16)
 ```
 
-`netVega_setelah_trade` dihitung satu lintasan dengan vega pada σ_mark saat ini (aproksimasi orde pertama; tidak perlu iterasi titik tetap — dokumentasikan).
+`util_after` dihitung satu lintasan dengan vega unit pada σ_mark(0) (aproksimasi orde pertama; tidak perlu iterasi titik tetap). Yang dibukukan ke `netVega`/`vegaAcc` adalah vega pada σ_buy (lebih besar — konservatif untuk cap), dilepas pro-rata (`vegaAcc × size / oi`) saat close dan seluruhnya saat settle. Vega unit negatif dibukukan 0, sehingga `netVega` mengabaikan OI bervega negatif — konservatif (eksposur pool tidak pernah dianggap lebih kecil dari yang sebenarnya).
 
 Contoh (σ_base 55%, VRP 1,15, α 0,30; call K = 4.200, 7 hari):
 
@@ -296,6 +297,8 @@ Contoh (σ_base 55%, VRP 1,15, α 0,30; call K = 4.200, 7 hari):
 | 0,8 | 78,43% | 95,17 |
 
 Pembeli besar menaikkan harga bagi dirinya sendiri (dihitung pada state pasca-trade) dan bagi pembeli berikutnya; penutupan menurunkannya. Spread `s` menjamin tidak ada round-trip gratis (INV-9).
+
+**Klem ke mark (R3-a; FR-14, INV-15/16).** Dengan p0 = harga pada σ_mark(0) — σ yang dipakai NAV (§8.4) — pool tidak pernah menjual di bawah p0 dan tidak pernah membeli balik di atas p0, sehingga setiap `buy`/`close` menaikkan atau mempertahankan NAV. Biayanya, dinyatakan apa adanya: di atas `util > s/(α(1−s))` ≈ 17,5 % (α 0,3; s 5 %) penutupan dibayar mid p0 — pool tidak lagi mengutip spread sisi tutup, artinya tidak lagi membayar premi untuk penutupan yang mengurangi risikonya. Trader bermodal A yang sekaligus menjadi LP hanya bisa merebut kembali porsi `f = A/(A + TVL)` dari markup sisi beli lewat deposit→buy→redeem; kerugiannya tetap ≥ `(1 − f) · markup + fee`. Keunggulan LP yang terjamin adalah VRP di σ_mark(0), theta, dan spread sisi beli.
 
 ### 6.5 Implied-vol solver
 
@@ -537,117 +540,168 @@ function totalSupply(uint256 id) external view returns (uint256);
 function uri(uint256 id) external view returns (string memory);   // metadata seri on-chain
 ```
 
-`totalSupply(id) == OI(id)` selalu (INV-4). Satu token per pool; `pool` immutable.
+`totalSupply(id) == OI(id)` selalu (INV-4), juga setelah settle karena `claim` mengurangi `oi`. Satu token per pool; `pool` diikat sekali lewat `bindPool(address)` oleh deployer-nya (factory) karena alamat pool belum ada saat token dibuat.
 
 ### 8.4 `EquinoxPool.sol`
 
 ```solidity
-struct Series { uint64 expiry; uint128 strike; bool isCall; uint128 oi; bool settled; uint128 payoutPerUnit; }
-struct Board  { uint64 expiry; uint256[] seriesIds; bool settled; uint256 settlementPrice; }
+struct Config   { uint16 feeBps; uint16 maxUtilBps; uint16 vegaCapBps; uint16 minPremiumBps; uint32 heartbeat; uint8 staleMult;
+                  uint32 sequencerGrace; uint8 maxOpenSeries; uint32 tenorMax; uint128 minSize; uint128 settleBounty; }
+struct Series   { uint32 boardId; uint64 expiry; uint128 strike; bool isCall; bool settled; uint256 oi; uint256 vegaAcc; uint256 payoutPerUnit; }
+struct Board    { uint64 expiry; bool settled; uint256 settlementPrice; uint256[] seriesIds; }
+struct Deploy   { address owner; address usdg; address feed; address sequencerFeed; address math; address treasury;
+                  Config cfg; EquinoxVolEngine.Params vol; uint256 sigmaSeed; int256 rWad; string name; string symbol; }
+struct QuoteOut { uint256 premiumAssets; uint256 feeAssets; uint256 sigma; int256 delta; uint256 vegaTotal; uint256 spotWad; }
 
-// LP (ERC-4626)
+uint256 public constant CAP_MULT = 2e18;              // cap call = 2K
+uint64  public constant CAPITAL_REF_DELAY = 1 days;   // jendela lag kapital referensi
+
+// LP (ERC-4626; keempatnya nonReentrant, satu evaluasi NAV per panggilan lewat memo transient)
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+function mint(uint256 shares, address receiver) external returns (uint256 assets);
 function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares);
+function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
 function totalAssets() public view override returns (uint256);
+function maxWithdraw(address owner) public view override returns (uint256);   // min(porsi, freeLiquidity)
+function maxRedeem(address owner) public view override returns (uint256);
 
 // Listing (owner, MVP)
 function createBoard(uint64 expiry, uint128[] calldata strikes) external onlyOwner returns (uint256 boardId);
 
 // Trading
-function quoteBuy(uint256 seriesId, uint256 size) external view returns (uint256 premium, uint256 fee, uint256 sigmaBuy, int256 delta);
-function quoteClose(uint256 seriesId, uint256 size) external view returns (uint256 proceeds, uint256 sigmaClose);
-function buy(uint256 seriesId, uint256 size, uint256 maxPremium) external returns (uint256 premium);
-function close(uint256 seriesId, uint256 size, uint256 minProceeds) external returns (uint256 proceeds);
+function quoteBuy(uint256 seriesId, uint256 size) public view returns (QuoteOut memory q);
+function quoteClose(uint256 seriesId, uint256 size) public view returns (uint256 proceedsAssets, uint256 sigmaClose, uint256 spotWad);
+function buy(uint256 seriesId, uint256 size, uint256 maxPremiumAssets) external nonReentrant returns (uint256 premiumAssets); // batas = premi + fee
+function close(uint256 seriesId, uint256 size, uint256 minProceedsAssets) external nonReentrant returns (uint256 proceedsAssets);
 
 // Settlement
-function settle(uint256 boardId) external;                       // permissionless, bounty
-function claim(uint256 seriesId, uint256 amount) external;       // tidak pernah bisa dijeda
+function settle(uint256 boardId) external nonReentrant;                                        // permissionless, bounty
+function claim(uint256 seriesId, uint256 amount) external nonReentrant returns (uint256 payoutAssets); // tidak pernah bisa dijeda
 
 // Transparansi
 function reserved() external view returns (uint256);
 function escrowedPayouts() external view returns (uint256);
 function freeLiquidity() external view returns (uint256);
 function netVega() external view returns (uint256);
-function pauseTrading(bool) external onlyOwner;                  // hanya buy + createBoard
+function series(uint256 id) external view returns (uint32 boardId, uint64 expiry, uint128 strike, bool isCall, bool settled, uint256 oi, uint256 vegaAcc, uint256 payoutPerUnit);
+function board(uint256 boardId) external view returns (uint64 expiry, bool settled, uint256 settlementPrice, uint256[] memory seriesIds); // revert BoardUnknown
+function boardCount() external view returns (uint256);
+function openSeriesIds() external view returns (uint256[] memory);
+function sigmaMarkNow() external view returns (uint256);                     // σ_mark(util saat ini), mid
+function spot() external view returns (uint256 priceWad, bool fresh);
+function capitalRefPrev() external view returns (uint256);                   // snapshot kapital (kas − escrow) sebelum jendela berjalan
+function capitalRefCur() external view returns (uint256);
+function capitalRefAt() external view returns (uint64);
+
+// Admin (Ownable2Step)
+function pauseTrading(bool) external onlyOwner;                              // hanya buy + createBoard
+function setConfig(Config calldata) external onlyOwner;                      // batas keras — lihat "Batas konfigurasi"
+function setTreasury(address) external onlyOwner;                            // ≠ 0
 ```
 
-**Alur `buy`:**
+**Alur `buy`** (`buy` → `quoteBuy`; transkripsi dari kode):
 ```
-1.  require !pausedTrading; seri terbuka & belum expiry; size ≥ minSize
-2.  (S, updatedAt) = oracle.spot(); cek stale & sequencer (FR-26) — revert bila gagal
-3.  vol.poke()  (no-op murah jika tidak ada round baru)
-4.  T = (expiry − now) sebagai WAD tahun
-5.  vega_i = math.quote(S, K, T, σ_mark_now, r, isCall).vega
-    util_after = clamp((netVega + vega_i·size) / vegaCap, 0, 1)
-    σ_buy = vol.sigmaMark(util_after) · (1 + s)
-6.  isCall ? (p, Δ, V) = math.cappedCall(S, K, 2K, T, σ_buy, r)
-           : (p, Δ, ·, V, ·) = math.quote(S, K, T, σ_buy, r, false)
-7.  premium = max(p·size, minPremiumBps·K·size)  → bulatkan ke atas ke 6 desimal
-    fee = premium · feeBps / 1e4 ; require premium + fee ≤ maxPremium
-8.  reserved += K·size ; require reserved ≤ maxUtilBps·(saldo − escrowed) ; require netVega + V·size ≤ vegaCap
-9.  USDG.transferFrom(msg.sender, this, premium + fee) ; USDG.transfer(treasury, fee)
-10. token.mint(msg.sender, id, size) ; oi += size ; netVega += V·size
-11. emit Bought(id, trader, size, premium, fee, σ_buy, S)
+0.  _refreshCapitalRef()  — geser snapshot kapital referensi bila jendela 1 hari sudah lewat ("Kapital referensi")
+1.  vol.poke()  dalam try/catch — kegagalan di dalam poke (oracle/math) tidak memblokir entry point mana pun (FR-36)
+2.  require !tradingPaused ; size ≥ minSize ; seri ada, belum settle, expiry > now + 60 s (blackout pra-expiry)
+3.  S = spot segar (FR-26) — revert OracleStale bila stale / sequencer down
+4.  T = (expiry − now) sebagai WAD tahun ; σ₀ = vol.sigmaMark(0)
+    (p0, ·, vega0) = price(S, K, T, σ₀)      — call: math.cappedCall(S, K, 2K, T, σ, r) ; put: math.quote(S, K, T, σ, r, false)
+5.  util_after = clamp((netVega + max(vega0, 0)·size) / (vegaCapBps · kapitalReferensi), 0, 1)
+    σ_buy = vol.sigmaMark(util_after) · (1 + s)  bila vega0 ≥ 0 ; · (1 − s) bila vega0 < 0
+6.  (p_buy, Δ, V) = price(S, K, T, σ_buy)
+7.  p = max(p_buy, p0)                      — klem ke mark (FR-14); σ yang dilaporkan = σ_buy bila p_buy > p0, selain itu σ₀
+    premium = max(p·size, minPremiumBps·K·size) → bulatkan ke atas ke 6 desimal ; fee = premium·feeBps/1e4 (ke atas)
+    require premium + fee ≤ maxPremiumAssets
+8.  kapitalReferensi = min(kas − escrow live, capitalRefPrev)
+    require reserved + K·size ≤ maxUtilBps · kapitalReferensi ; require netVega + max(V, 0)·size ≤ vegaCapBps · kapitalReferensi
+9.  reserved += K·size ; netVega += max(V, 0)·size ; oi += size ; vegaAcc += max(V, 0)·size
+    USDG.transferFrom(trader, pool, premium + fee) ; USDG.transfer(treasury, fee) ; token.mint(trader, id, size)   (CEI)
+    emit Bought(id, trader, size, premium, fee, σ_efektif, S)
 ```
 
-**Alur `close`:** cermin `buy` dengan σ_close = σ_mark(util_after_turun) · (1 − s), proceeds dibulatkan ke bawah, `reserved −= K·size`, `netVega −= V·size`, burn lalu transfer (CEI). Tidak terpengaruh `pausedTrading`.
+**Alur `close`:** cermin `buy` — `rel = vegaAcc · size / oi` (dibatasi `netVega`); σ_close = σ_mark(util(netVega − rel)) · (1 − s) (· (1 + s) bila vega0 < 0); `p = min(p_close, p0)` — klem ke mark, σ yang dilaporkan = σ₀ bila klem mengikat; proceeds = p·size dibulatkan ke bawah, `require ≥ minProceedsAssets`; `oi −= size`, `vegaAcc −= rel`, `netVega −= rel`, `reserved −= K·size`; burn lalu transfer (CEI). Tidak terpengaruh `tradingPaused`, tidak pernah ditolak util/vega cap; tetap butuh spot segar dan `math` (kuotasi); ditolak dalam blackout 60 s pra-expiry — pemegang menunggu `settle`.
 
 **Alur `settle(boardId)`:**
 ```
-1. require now ≥ expiry && !settled
-2. (S_T, updatedAt) = oracle.latestRoundData() ; require updatedAt ≥ expiry && now − updatedAt ≤ staleWindow
-3. untuk setiap seri: payout = isCall ? min(max(S_T − K, 0), K) : max(K − S_T, 0)
-   escrowed += oi·payout ; reserved −= oi·K ; netVega −= oi·vega_i (atau set ulang via markPortfolio)
-4. settlementPrice = S_T ; settled = true ; USDG.transfer(msg.sender, settleBounty)
-5. emit Settled(boardId, S_T)
+0. _refreshCapitalRef() ; vol.poke() (try/catch)
+1. require boardId < boardCount (BoardUnknown) ; !settled (BoardAlreadySettled) ; now ≥ expiry (BoardNotExpired)
+2. spot = OracleLib.read(…) ; require spot.fresh && spot.updatedAt ≥ expiry (SettlementNotReady)
+   — round segar mana pun pasca-expiry yang ada SAAT dipanggil, bukan "round pertama" secara historis (T2)
+3. untuk setiap seri: payout = isCall ? min(max(S_T − K, 0), K) : max(K − S_T, 0)     (_payoutPerUnit — rumus yang sama dengan MtM blackout)
+   settled = true ; payoutPerUnit = payout ; escrowed += oi·payout ; reserved −= oi·K ; netVega −= min(netVega, vegaAcc) ; vegaAcc = 0
+   hapus dari daftar seri terbuka
+4. settlementPrice = S_T ; board.settled = true ; emit Settled(boardId, S_T, Δescrowed, Δreserved)
+5. bounty ke msg.sender hanya bila freeLiquidity ≥ settleBounty
 ```
 Sisa `oi·K − oi·payout` otomatis menjadi milik LP karena tidak lagi dikurangkan dari `totalAssets`.
 
-**Alur `claim`:** `require settled` → burn `amount` → `escrowed −= amount·payout` → transfer (bulatkan ke bawah). Tidak ada pause, tidak ada batas waktu di MVP.
+**Alur `claim`:** `require settled` → `oi −= amount` (INV-4 tetap berlaku setelah settle) → `escrowed −= amount·payoutPerUnit` → burn `amount` → transfer (bulatkan ke bawah). Tidak ada pause, tidak ada batas waktu di MVP.
 
 **`totalAssets()` (FR-17, FR-36):**
 ```
-jika oracle segar:
-    (mtm, ·) = math.markPortfolio(S, r, σ_mark(util_now), 2, k[], t[], isCall[], oi[])
-    return saldoUSDG − escrowed − min(mtm, saldoUSDG − escrowed)
-jika oracle stale atau staticcall math gagal (try/catch):
-    deposit → revert OracleStale() / MathUnavailable()
-    withdraw → memakai NAV konservatif = saldoUSDG − escrowed − reserved
+kewajiban (_liabilityWad):
+    tidak ada seri terbuka → 0
+    oracle segar → seri dengan expiry ≤ now + 60 s (blackout / sudah lewat expiry): intrinsik += oi · payout(S_now, K), oi[i] := 0
+                   (mtm, ·) = math.markPortfolio(S, r, σ_mark(0), 2, k[], t[], isCall[], oi[])   — seri lainnya, satu panggilan
+                   kewajiban = mtm + intrinsik
+    oracle stale, atau staticcall vol/math gagal (try/catch) → kewajiban = reserved  (konservatif)
+totalAssets = saldoUSDG − escrowed − min(kewajiban, saldoUSDG − escrowed)
+deposit / mint    : revert OracleStale() bila spot stale (juga tanpa seri terbuka) ; revert MathUnavailable() bila jalur konservatif dipakai dengan seri terbuka
+withdraw / redeem : selalu jalan — pada NAV konservatif (saldoUSDG − escrowed − reserved) bila jalur konservatif dipakai
 ```
-MtM memakai σ_mark (mid, tanpa spread). Konsekuensinya: spread langsung terealisasi sebagai keuntungan LP saat trade; theta terakumulasi ke LP seiring waktu; perubahan σ_mark dan S memindahkan NAV setiap blok — persis seperti vault opsi yang jujur.
+MtM memakai σ_mark(0) = σ_base × VRP (mid, tanpa spread, **tanpa dampak inventaris**). Alasannya (temuan audit C-1): util bergantung pada kas dan `netVega` yang diubah oleh deposit/redeem itu sendiri, sehingga MtM pada σ_mark(util) membuka sandwich deposit→redeem (PoC 0,65 % TVL per putaran). Karena harga trade tidak pernah menembus mark (FR-14), setiap `buy`/`close` menaikkan atau mempertahankan NAV (INV-15) — spread dan dampak inventaris terealisasi sebagai keuntungan LP saat trade; theta terakumulasi seiring waktu; perubahan σ_base dan S memindahkan NAV setiap blok.
 
-**Events:** `Bought`, `Closed`, `BoardCreated`, `Settled`, `Claimed`, `Deposited`, `Withdrawn`, `TradingPaused`.
+Seri dalam blackout 60 s pra-expiry atau yang sudah lewat expiry di-mark pada **nilai intrinsik** terhadap spot saat ini (`min(max(S − K, 0), K)` / `max(K − S, 0)` — helper `_payoutPerUnit` yang sama dengan `settle`), bukan pada nilai waktu; karena itu `settle` hanya menggeser NAV sebesar bounty dan selisih antara spot mark dan round settlement (temuan audit akhir I-1: sebelumnya deposit→settle→redeem menangkap lompatan NAV di settle, PoC +213 USDG per board ATM). Konsekuensi yang diterima dan dinyatakan jujur: nilai waktu ≈ 60 detik terakhir sebuah seri lenyap di batas blackout (`expiry − 60 s`), bukan saat `settle`; ia hanya bisa ditangkap oleh round-trip LP dua blok yang mengapit detik itu — sebesar LP 61 detik mana pun di bawah marking kontinu; cooldown penarikan (FR-37, P1) menghapusnya. NAV dievaluasi **sekali** per entry point ERC-4626 lewat memo transient storage (EIP-1153; kata kunci `transient`, solc 0.8.28, EVM cancun; Arbitrum sejak ArbOS 20) dan `deposit`/`mint`/`withdraw`/`redeem` `nonReentrant` (temuan I-3: sebelumnya `_liabilityWad` dievaluasi dua kali per deposit — terukur di devnode, `deposit` dengan 6 seri terbuka turun 291.893 → 219.538 gas di Solidity dan 263.429 → 220.352 di Stylus, §13).
+
+**Kapital referensi (lag) — R2-a.** Util dan semua cap (`maxUtilBps`, `vegaCapBps`) dihitung atas `kapitalReferensi = min(kapital live, capitalRefPrev)`, di mana `capitalRefPrev`/`capitalRefCur` adalah dua snapshot `saldo − escrowed` yang digeser sekali per `CAPITAL_REF_DELAY = 1 hari` di awal setiap `buy`/`close`/`settle`/`deposit`/`mint`/`withdraw`/`redeem` (bootstrap pada deposit pertama). Deposit baru memperluas kapasitas trading setelah 1–2 hari; penarikan mengurangi kapasitas seketika. Tanpa ini, deposit besar menurunkan util seketika → beli murah → redeem → tutup pada util tinggi (PoC +965 USDG per blok). Residual yang diterima: LP yang kapitalnya sudah "menua" masih bisa memanfaatkan selisih util sekali per ≈ 2 hari, dibatasi porsi LP-nya (T16).
+
+**Batas konfigurasi (`_setConfig`, `ConfigOutOfBounds(which)`):** `feeBps ≤ 1000`, `0 < maxUtilBps ≤ 9000`, `0 < vegaCapBps ≤ 5000`, `minPremiumBps ≤ 100`, `heartbeat ∈ [1 jam, 1 hari]` (heartbeat 1 detik akan membuat spot stale permanen dan membekukan `close`/`settle`/`claim` — FR-33 lewat jalan lain), `staleMult ≥ 1`, `sequencerGrace ≤ 1 hari`, `0 < maxOpenSeries ≤ 32`, `0 < tenorMax ≤ 90 hari`, `minSize > 0`, `settleBounty ≤ 100 USDG`; `treasury ≠ 0` (konstruktor dan `setTreasury`); `rWad ∈ [−0,5; 0,5]` saat konstruksi (deployment memakai 0).
+
+**Oracle (`OracleLib.read`):** spot segar ⇔ sequencer naik (`answer == 0`, `startedAt ∈ (0, now]`, grace sudah lewat) dan `answer > 0`, `updatedAt ∈ (0, now]`, umur ≤ heartbeat × staleMult; feed yang revert = tidak segar (try/catch). Round sequencer dengan `startedAt == 0` (belum diinisialisasi) dihitung **down**; `startedAt`/`updatedAt` di masa depan dihitung tidak segar. `sequencerFeed = address(0)` = tanpa cek sequencer (devnode/demo).
+
+**Events:** `Bought(seriesId, trader, size, premiumAssets, feeAssets, sigmaBuy, spotWad)`, `Closed(seriesId, trader, size, proceedsAssets, sigmaClose, spotWad)`, `BoardCreated(boardId, expiry, seriesIds)`, `Settled(boardId, settlementPriceWad, escrowedAddedWad, reservedReleasedWad)`, `Claimed(seriesId, holder, amount, payoutAssets)`, `TradingPaused(paused)`, `ConfigUpdated(cfg)`, `TreasuryUpdated(treasury)`; `Deposit`/`Withdraw` ERC-4626 dari OpenZeppelin. σ di `Bought`/`Closed` adalah σ **efektif** (σ₀ bila klem ke mark mengikat).
 
 ### 8.5 `EquinoxVolEngine.sol`
 
 ```solidity
-struct Params { uint64 lambdaPerDay; uint64 vrp; uint64 alpha; uint64 spread; uint64 sigmaMin; uint64 sigmaMax; }
-struct State  { uint256 varWad; uint256 lastPrice; uint80 lastRoundId; uint64 lastTs; }
+struct Params { uint64 lambdaPerDay; uint64 vrp; uint64 alpha; uint64 spread; uint64 sigmaMin; uint64 sigmaMax; }   // semua WAD
+uint256 public varWad; uint256 public lastPrice; uint80 public lastRoundId; uint64 public lastTs; uint64 public lastParamsUpdate;
+uint64  public constant MIN_OBS_INTERVAL = 60;        uint64  public constant PARAMS_MIN_INTERVAL = 6 hours;
+uint256 public constant MAX_PARAM_DELTA_BPS = 2000;   uint64  public constant MAX_ALPHA_DELTA = 0.2e18;
 
 function poke() external returns (uint256 sigmaBase);            // permissionless (FR-12)
-function sigmaBase() external view returns (uint256);
+function sigmaBase() public view returns (uint256);              // clamp(√varWad, σ_min, σ_max)
 function sigmaMark(uint256 utilWad) external view returns (uint256);
-function setParams(Params calldata p) external onlyOwner;          // dibatasi keras + rate-limited
+function spread() external view returns (uint256);
+function setParams(Params calldata p) external onlyOwner;          // dibatasi keras + rate-limited (Ownable2Step)
 ```
 
-**Guard `setParams`:** `sigmaMin ≥ 5%`, `sigmaMax ≤ 500%`, `vrp ∈ [1,0; 2,0]`, `alpha ∈ [0; 1,0]`, `spread ∈ [0,5%; 20%]`, `lambda ∈ [0,80; 0,99]`; `|Δparam| ≤ 20%` per `minUpdateInterval` (6 jam). Tidak ada fungsi `setSigma` — σ_base hanya bisa berubah lewat observasi harga.
+`σ_mark(u) = clamp(σ_base · VRP · (1 + α·u))` dengan `σ_base = clamp(√var)` — σ_base di-clamp **dulu**, baru produknya (§6.4/FR-15; dipulihkan pada gelombang perbaikan, M-1): saat √var < σ_min pool me-mark pada σ_min × VRP, bukan σ_min telanjang.
+
+**Guard `setParams`:** `sigmaMin ≥ 5%`, `sigmaMax ≤ 500%`, `vrp ∈ [1,0; 2,0]`, `alpha ∈ [0; 1,0]`, `spread ∈ [0,5%; 20%]`, `lambda ∈ [0,80; 0,99]`; `|Δparam| ≤ 20%` relatif (alpha: ≤ 0,2 absolut, karena boleh mulai dari 0) per `PARAMS_MIN_INTERVAL` (6 jam). Tidak ada fungsi `setSigma` — σ_base hanya bisa berubah lewat observasi harga. Tambahan (R3-b): `sigmaMax × (1 + spread) ≤ 500 %` agar σ_buy/σ_close tidak pernah keluar domain `math` (`SIGMA_MAX = 5e18`); sisi bawah tersirat (`sigmaMin × (1 − spread) ≥ 4 % > SIGMA_MIN 1 %`).
 
 **`poke()`:**
 ```
 (roundId, price, updatedAt) = feed.latestRoundData()
-jika roundId ≤ lastRoundId atau updatedAt − lastTs < minObsInterval → return sigmaBase()
+jika roundId ≤ lastRoundId atau price ≤ 0 atau updatedAt ≤ lastTs atau updatedAt > now → return sigmaBase()
+jika updatedAt − lastTs < MIN_OBS_INTERVAL (60 s) → return sigmaBase()
 varWad = math.ewmaUpdate(varWad, lastPrice, price, updatedAt − lastTs, lambdaPerDay)
-simpan state ; emit Observed(roundId, price, sigmaBase)
+simpan state ; emit Observed(roundId, price, Δt, varWad, sigmaBase)
 ```
-Inisialisasi: `varWad` = (σ_seed)² dari deployer (mis. 55%²) — **satu-satunya** input σ manusia, hanya saat deploy, dan meluruh dengan λ.
+Jalur "tidak ada round baru" tetap memanggil `math.sqrt` lewat `sigmaBase()`, karena itu pool membungkus `vol.poke()` dalam try/catch (FR-36). Round bertanggal masa depan (`updatedAt > now`) diabaikan, simetris dengan `OracleLib`; round dengan Δt < 60 s tidak dibuang — pergerakannya masuk ke observasi berikutnya (return dihitung dari `lastPrice`). EWMA **tidak di-winsorisasi**: satu observasi dengan log-return ±30 % menambah ≈ 2,0 ke var (σ_base 55 % → ≈ 1,5) dan meluruh dengan memori ≈ 16 hari — didokumentasikan, tidak diubah (agregasi Chainlink membuatnya sangat kecil kemungkinannya; `sigmaMax` tetap membatasi σ).
+
+Inisialisasi: `varWad` = (σ_seed)² dari deployer (mis. 55%²) — **satu-satunya** input σ manusia, hanya saat deploy, dan meluruh dengan λ; `lastPrice`/`lastRoundId`/`lastTs` diambil dari round feed saat deploy (`answer > 0`, `updatedAt ≠ 0`) — konstruktor mempercayai `updatedAt` round seed; hanya `poke` yang menolak round bertanggal masa depan.
 
 ### 8.6 `EquinoxFactory.sol`
 ```solidity
-function createPool(address usdg, address feed, address sequencerFeed, address math, address treasury,
-                    PoolParams calldata p, VolParams calldata v, uint256 sigmaSeed) external returns (address pool);
+function createPool(EquinoxPool.Deploy calldata d) external returns (address pool);   // satu argumen struct (§8.4 `Deploy`)
 function pools(uint256 i) external view returns (address);
+function poolCount() external view returns (uint256);
+function poolDeployer() external view returns (PoolDeployer);                        // hanya `new EquinoxPool`; onlyFactory
+event PoolCreated(address indexed pool, address token, address vol, address indexed math, address usdg, address feed);
 ```
-Men-deploy `EquinoxOptionToken` + `EquinoxVolEngine` + `EquinoxPool` dalam satu transaksi, mengikat `math` secara immutable. Demo memanggilnya dua kali: `math = BlackScholesSol` (Pool A) dan `math = Stylus` (Pool B).
+Men-deploy `EquinoxVolEngine` + `EquinoxOptionToken`, lalu `EquinoxPool` lewat kontrak `PoolDeployer` terpisah, lalu `token.bindPool(pool)` — semua dalam satu transaksi (`createPool(Deploy)`); `math` immutable di pool dan vol engine. Dua level diperlukan karena **batas kode 24.576 byte** (EIP-170): factory satu-level harus menanam initcode pool + token + vol engine (21,7 + 5,5 + 6,4 = 33,5 KB) di runtime-nya; dengan pemisahan, runtime factory 13,8 KB dan `PoolDeployer` 23,0 KB — margin `PoolDeployer` hanya ≈ 1,5 KB (1.552 B) karena ia menanam initcode pool, sehingga pertumbuhan pool di atas itu mematahkan jalur factory. Test Foundry tidak menegakkan batas ini — chain sungguhan iya; CI menjalankan `forge build --sizes` dan gagal bila ada margin runtime negatif. `createPool` permissionless dan `pools[]` tidak diverifikasi (siapa pun bisa mendaftarkan pool dengan `math`/feed/USDG sembarang) — hanya alamat yang di-deploy demo yang kanonik. Demo memanggilnya dua kali: `math = BlackScholesSol` (Pool A) dan `math = Stylus` (Pool B).
 
 ### 8.7 `EquinoxLens.sol` (view, untuk UI & demo)
 `quoteWithGreeks(pool, seriesId, size)`, `navBreakdown(pool)` → (saldo, escrowed, reserved, mtm, netVega, util), `surface(pool)` → σ_mark per seri terbuka + IV tersirat dari harga beli (`impliedVol`). Boleh dibuang jika waktu sempit.
@@ -742,21 +796,23 @@ Next.js + wagmi: panel kuotasi (premi, Greeks, σ_mark, util), NAV breakdown, da
 
 | # | Ancaman | Vektor | Mitigasi | Residual |
 |---|---|---|---|---|
-| T1 | Spot stale / sequencer down | kuotasi dengan harga lama | FR-26: revert kuotasi; sequencer uptime feed + grace; settlement menunggu round segar | Rendah |
-| T2 | Timing settlement | keeper/griefer memilih round | FR-27: round **pertama** dengan `updatedAt ≥ expiry`; permissionless + bounty; Chainlink eksogen | **Diterima & didokumentasikan** (round pertama bisa terlambat jika tak ada yang memanggil) |
-| T3 | Manipulasi σ_mark via wash trade | beli besar → σ naik → tutup | spread `s` dua arah, fee, dampak dihitung pasca-trade, `alpha` dibatasi, vega cap | Rendah (biaya > keuntungan; INV-9) |
-| T4 | Model ekor salah (lognormal) | beli deep-OTM murah lalu crash | `minPremiumBps` floor; `minListingDelta` (P1); cap call | **Diterima** — ini risiko LP yang eksplisit, bukan bug |
+| T1 | Spot stale / sequencer down | kuotasi dengan harga lama | FR-26: revert kuotasi; sequencer uptime feed + grace; settlement menunggu round segar; round sequencer dengan `startedAt == 0` dihitung down, `startedAt`/`updatedAt` masa depan dihitung tidak segar (`OracleLib`) | Rendah |
+| T2 | Timing settlement | keeper/griefer memilih round | FR-27: round segar dengan `updatedAt ≥ expiry` yang ada **saat `settle` dipanggil** — bukan round pertama secara historis; permissionless + bounty; Chainlink eksogen | **Diterima & didokumentasikan** — operator MUST menjalankan keeper (§10.3); bounty adalah insentif, bukan jaminan; round yang dipakai terlambat jika tak ada yang memanggil |
+| T3 | Manipulasi σ_mark via wash trade | beli besar → σ naik → tutup | spread `s` dua arah, fee, dampak dihitung pasca-trade, `alpha` dibatasi, vega cap; kapital referensi di-lag (§8.4); harga tidak pernah menembus mark (INV-15/16) | Rendah (biaya > keuntungan; INV-9) |
+| T4 | Model ekor salah (lognormal) | beli deep-OTM murah lalu crash | `minPremiumBps` floor; `minListingDelta` (P1); cap call — lihat T17 untuk sisi sewa modalnya | **Diterima** — ini risiko LP yang eksplisit, bukan bug |
 | T5 | Insolvensi pool | S_T ekstrem | cadangan = payout maksimum; cap call; `maxUtilBps`; INV-1..3 fuzz | Nihil by construction |
-| T6 | LP sniping NAV (lag Chainlink vs pasar) | deposit/withdraw sebelum update | MtM NAV setiap aksi; withdrawal cooldown (P1); deposit revert saat stale | Rendah–sedang (**sebutkan**; cooldown adalah jawaban produksi) |
+| T6 | LP sniping NAV (lag Chainlink vs pasar) | deposit/withdraw sebelum update | MtM NAV setiap aksi; withdrawal cooldown (P1); deposit revert saat stale; `vol.poke()` di setiap entry point (menutup lever "deposit→poke→redeem"); nilai waktu ≈ 60 s terakhir sebuah seri lenyap di batas blackout `expiry − 60 s` (§8.4) — hanya bisa ditangkap round-trip LP dua blok yang mengapit detik itu, sebesar LP 61 detik mana pun | Rendah–sedang (**sebutkan**; cooldown adalah jawaban produksi) |
 | T7 | Program Stylus kedaluwarsa / butuh aktivasi ulang | `buy`/`close`/`deposit` revert (butuh kuotasi) | reaktivasi permissionless (siapa pun, dalam menit); FR-36: `claim` & `withdraw` konservatif tetap jalan; keeper alarm; opsi produksi: fallback otomatis ke `BlackScholesSol` (D14) | Rendah |
 | T8 | Pembulatan menguntungkan trader | dust, WAD→6 dp | FR-35 arah pembulatan; `minSize`; fuzz INV-1 dengan dust | Rendah |
-| T9 | USDG dipause / alamat diblokir | Paxos | tidak bisa dimitigasi di kontrak; dokumentasikan; UI menampilkan status | **Diterima** |
-| T10 | Reentrancy | callback token | USDG/ERC-1155 receiver hooks: CEI + `ReentrancyGuard` di pool; Stylus tanpa panggilan keluar | Nihil |
+| T9 | USDG dipause / alamat diblokir | Paxos | tidak bisa dimitigasi di kontrak; dokumentasikan; UI menampilkan status; treasury yang diblokir membuat `buy` revert (transfer fee gagal) sampai `setTreasury` | **Diterima** |
+| T10 | Reentrancy | callback token | USDG/ERC-1155 receiver hooks: CEI + `nonReentrant` pada `buy`/`close`/`settle`/`claim` dan keempat entry ERC-4626; Stylus tanpa panggilan keluar | Nihil untuk `buy`/`close`/`settle`/`claim` (`nonReentrant`, diuji dengan pembeli re-entrant lewat hook ERC-1155: `close`/`buy`/`claim` dari dalam `buy` ditolak `ReentrancyGuardReentrantCall`); entry point ERC-4626 juga `nonReentrant` — USDG dan token share tanpa hook, guard menjadikannya jaminan, bukan asumsi (tidak diuji re-entrant) |
 | T11 | Ketidaksesuaian Stylus vs kontrol | bug port | INV-12 di L4 pada grid penuh; kontrol tidak pernah dipakai produksi | Rendah |
 | T12 | Griefing gas via seri | listing banyak seri → loop MtM mahal | `maxOpenSeries` 32; listing owner-only di MVP | Nihil |
 | T13 | Front-running trade | mempool | Sequencer Arbitrum FCFS tanpa mempool publik; `maxPremium`/`minProceeds` slippage guard | Rendah |
-| T14 | Parameter admin merusak harga | `setParams` | batas keras + rate limit (§8.5); tidak ada `setSigma` | Rendah |
+| T14 | Parameter admin merusak harga | `setParams`, `setConfig` | batas keras + rate limit (§8.5); batas `setConfig` (§8.4); tidak ada `setSigma`; owner `Ownable2Step` | Rendah–sedang: owner **tanpa timelock** — `setParams` bisa menggeser σ_mark(0) hingga 20 % per 6 jam (VRP ±20 %), yang menggeser kewajiban MtM sebesar vega × Δσ dan dengannya NAV; `setConfig` mengubah cap harga seketika; produksi: timelock/multisig |
 | T15 | Seed σ awal salah | deploy | hanya saat deploy, meluruh dengan λ; kalibrasi §10.2 | Rendah |
+| T16 | LP sandwich NAV/harga via util & σ (deposit→trade→redeem) | deposit mengubah kas/util seketika; NAV atau harga trade bergerak | NAV di-mark pada σ_mark(0) (D8); kapital referensi di-lag 1 hari; harga tidak pernah menembus mark (FR-14, INV-15/16); diuji: sandwich literal rugi (`test_dilution_sandwich_cannot_profit`), deposit→settle→redeem rugi (`test_jit_settle_sandwich_cannot_profit`) | Rendah — lever sisi withdraw sekali per ≈ 2 hari, dibatasi porsi LP (**diterima & didokumentasikan**) |
+| T17 | Sewa modal murah via floor premi | beli deep-OTM: cadangan `K × size` terkunci berapa pun preminya | `minPremiumBps` adalah **floor sewa modal**, bukan mitigasi: 5 bps × K menyewa kunci K selama tenor penuh (200 P 2.600 mengunci 520k dari pool 1 juta seharga ≈ 260 USDG); sampai FR-20 (`minListingDelta`, P1): rentang strike [S/2, 2S] + listing owner-only + `maxUtilBps` | **Diterima & didokumentasikan** — jawaban produksi: FR-20 |
 
 T5 dan T3 layak disorot di pitch: satu invariant yang dibuktikan fuzz (solvabilitas) dan satu properti ekonomi yang dibuktikan test (tidak ada round-trip gratis).
 
@@ -780,7 +836,9 @@ T5 dan T3 layak disorot di pitch: satu invariant yang dibuktikan fuzz (solvabili
 | INV-11 | `settle` idempoten; `Σ claim ≤ escrowed`; setelah semua claim `escrowed == 0` |
 | INV-12 | Stylus vs `BlackScholesSol`: `exp`/`ln`/`sqrt` bit-identik; harga ≤ 1e-9 relatif pada grid §10.1 |
 | INV-13 | Pada `settle`: `Δescrowed = Σ OI_i × payout_i ≤ Σ OI_i × K_i = −Δreserved` — settle tidak pernah menciptakan kewajiban di atas cadangan yang dilepas |
-| INV-14 | `close`, `claim`, `withdraw(freeLiquidity)` sukses saat `pausedTrading == true` |
+| INV-14 | `close`, `claim`, `withdraw(freeLiquidity)` sukses saat `tradingPaused == true` |
+| INV-15 | `totalAssets` tidak pernah turun oleh sebuah `buy`/`close` (harga ≥/≤ mark) |
+| INV-16 | `quoteBuy(id, n) ≥ quoteClose(id, n)` untuk setiap seri terbuka dan setiap n — menguatkan INV-9 untuk vega negatif |
 
 ### Skenario test wajib
 1. **Happy path:** LP deposit 1 juta → trader beli 10 C 4.200 → σ_mark naik terukur → warp 7 h → feed 4.500 → settle → claim 3.000 → NAV LP = 1.000.000 + premi − 3.000, dengan premi ≥ 648,68 (mid) karena spread dan dampak inventaris; fee ke treasury tidak masuk NAV.
@@ -796,7 +854,9 @@ T5 dan T3 layak disorot di pitch: satu invariant yang dibuktikan fuzz (solvabili
 11. **Cap call:** S_T = 9.000 vs 8.400 membayar sama (K).
 12. **Program belum aktif (L4):** panggilan ke alamat Stylus sebelum `activate` → revert; setelah → sukses. Dokumentasikan gasnya.
 
-Target: **≥ 90% line coverage** pada `EquinoxPool`, `EquinoxVolEngine`, `BlackScholesSol`; invariant run ≥ 50k; L1 100% fungsi tercakup vektor. Proyek sebelumnya di pipeline ini (CorpAction Engine) melaporkan 94,2% — jangan kirim angka jauh di bawah itu.
+Target: **≥ 90% line coverage** pada `EquinoxPool`, `EquinoxVolEngine`, `BlackScholesSol`; invariant run ≥ 50k; L1 100% fungsi tercakup vektor. Proyek sebelumnya di pipeline ini (CorpAction Engine) melaporkan 94,2% — jangan kirim angka jauh di bawah itu. Tercapai 19 Sep 2026 (Plan 2, `forge coverage --ir-minimum`, setelah gelombang perbaikan): `EquinoxPool` 92,1 %, `EquinoxVolEngine` 98,6 %, `EquinoxOptionToken` 100 %, `OracleLib` 100 %, `EquinoxFactory` 87,5 % (`poolCount()` tak terpanggil), `BlackScholesSol` 98,8 % — total `src/pool` + `src/oracle` 93,4 % baris (428/458); invariant 7 × 51.200 panggilan (256 run × kedalaman 200, 0 revert) di HEAD.
+
+**Suite invariant (L3, `EquinoxPool.invariants.t.sol`):** 7 invariant — INV-1, 2, 4, 10, 11, 15, 16 — atas handler `deposit`/`withdraw`/`buy`/`close`/`tickTime`/`settle`/`claim` dengan dua board (7 dan 14 hari); konfigurasi default `foundry.toml` 32 run × kedalaman 128 = 4.096 panggilan per invariant (CI), run panjang 256 × 200 = 51.200. INV-13 di-assert lewat event `Settled` (`Δescrowed ≤ Δreserved`) di skenario 1 dan 2; INV-3 lewat skenario 2; INV-9/INV-14 lewat `test_wash_trade_is_not_free`/`test_pause_semantics`; klaim parsial multi-pemegang, `mint`, dan kedua sandwich (deposit→buy→redeem→close; deposit→settle→redeem) diuji sebagai unit test; satu evaluasi NAV per entry ERC-4626 di-assert dengan `vm.expectCall(markPortfolio, 1)`. CI menegakkan `forge build --sizes` (margin runtime setiap kontrak > 0).
 
 ---
 
@@ -827,11 +887,11 @@ Urutan yang dijalankan pada keduanya dengan input identik, mencetak tabel:
 
 **Micro-benchmark biaya marjinal** (program terpisah, loop 1.000 iterasi, gas per pasangan `mul_wad`+`div_wad`): `I256` (ruint) **105**; `i128` Q64.64 **29**; `u64` **0,5**; EVM Solidity ≈ 30–40 (`MUL`/`DIV` = 5 gas). Inilah alasan rasio 2,6–2,9× dan bukan 10×: keunggulan WASM ada di alur kontrol, bukan di aritmetika 256-bit. Jalur `i128` Q64.64 (D5) diperkirakan menaikkan rasio lingkaran ke ~5× — **belum diukur end-to-end**.
 
-Yang masih harus diukur di Hari 9–10 (butuh pool): `buy` end-to-end, `deposit` LP dengan 32 seri (NAV MtM), 32 × `quote` terpisah vs satu `markPortfolio`, dan biaya aktivasi aktual (Sepolia: 0,000147 ETH per `cargo stylus check`).
+Baris pool (`buy`, `close`, `deposit` dengan seri terbuka) sudah diukur di devnode dengan dua pool identik (`tools/e2e/pool-e2e.sh` + `PoolE2EDeployer`, lewat `cast` karena `forge script` tidak bisa mengeksekusi WASM) — lihat docs/BENCHMARK.md seksi "Transaksi pool end-to-end": `buy` 10 C 4.200 387.211 vs 367.932 gas (1,05×), `close` 5 254.792 vs 235.533 (1,08×), `deposit` dengan 6 seri terbuka 219.538 vs 220.352 (0,99×) — rasio 0,99–1,08× karena transaksi didominasi storage EVM dan transfer token, bukan matematika (matematika ≈ 23–27 % dari gas `buy`). Baris `deposit` 0,99×: dengan satu `markPortfolio` atas satu seri hidup, kolom Stylus tidak lagi mengamortisasi premi inisialisasi program ≈ 31k gas (tanpa cache) — konsisten dengan temuan Plan 1: loop menang, panggilan tunggal kecil tidak. Kuotasi, NAV, σ_mark, cadangan, dan kas kedua pool identik byte-per-byte. Belum diukur: 32 × `quote` terpisah vs satu `markPortfolio` di dalam pool, `deposit` dengan 32 seri hidup, dan biaya aktivasi aktual di Sepolia (0,000147 ETH per `cargo stylus check`).
 
 Lalu narasi: LP deposit → beli 10 C 4.200 (mid 64,87 per unit pada σ_mark 63,25%; harga beli lebih tinggi karena spread + dampak — cetak keduanya) → beli P 2.600 (floor menang, tidak nol) → warp 7 h → feed 4.500 → `settle` → `claim` → NAV LP. Angka yang tercetak harus cocok dengan §6.7 dan skenario 1 §12.
 
-**Aturan kejujuran untuk tabel ini** (sudah dijalankan): rasio 10× yang ditargetkan v1.0 **tidak tercapai** dan dicabut dari seluruh dokumen; narasi bergeser ke iterasi & batch (2,6–2,9×) plus benchmark itu sendiri sebagai kontribusi. Baris `buy`/`deposit` diharapkan rasio lebih kecil lagi karena didominasi storage EVM — jangan sembunyikan, jelaskan. Skrip: `tools/bench/bench.sh` (harness `contracts/src/Bench.sol`).
+**Aturan kejujuran untuk tabel ini** (sudah dijalankan): rasio 10× yang ditargetkan v1.0 **tidak tercapai** dan dicabut dari seluruh dokumen; narasi bergeser ke iterasi & batch (2,6–2,9×) plus benchmark itu sendiri sebagai kontribusi. Baris `buy`/`close`/`deposit` terukur 0,99–1,08× karena didominasi storage EVM — tidak disembunyikan, dijelaskan. Skrip: `tools/bench/bench.sh` (harness `contracts/src/Bench.sol`).
 
 > `block.number` di Arbitrum adalah estimasi L1. Gunakan `block.timestamp` dan `vm.warp` untuk memajukan waktu di demo; di devnode, majukan waktu lewat RPC `evm_increaseTime` jika tersedia, atau pakai expiry pendek (jam) untuk rekaman video.
 
@@ -943,13 +1003,15 @@ Jangan tulis satu baris kontrak sebelum semua ini terjawab dengan `cast`/`curl`/
 | D5 | Aritmetika | `I256` WAD end-to-end vs `i128` Q64.64 internal | **`I256` WAD untuk MVP** — sudah dibangun, bit-identik, 2,6–2,9× pada lingkaran. Terukur: `i128` 29 gas vs `I256` 105 per pasangan mul+div → refactor Q64.64 internal adalah **P1 Hari 11** jika waktu ada (perkiraan rasio lingkaran ~5×; ABI tetap WAD) |
 | D6 | Algoritma Φ | Cody erfc vs A&S 26.2.17 | **Cody.** Tidak ada alasan gas di Stylus untuk 1e-7 ketika 1e-15 tersedia; kontrol memakai algoritma sama |
 | D7 | Solver IV | Newton + bisection vs Jäckel | **Newton + bisection.** Terverifikasi 3–20 iterasi; Jäckel untuk produksi |
-| D8 | MtM NAV | σ_mark (mid) vs σ_buy (konservatif) | **σ_mark.** Spread terealisasi saat trade; konservatif hanya saat stale (FR-36) |
+| D8 | MtM NAV | σ_mark(util) (mid) vs σ_mark(0) vs σ_buy | **σ_mark(0) = σ_base × VRP** (direvisi Plan 2): σ_mark(util) membuka sandwich NAV karena util diubah oleh deposit/redeem itu sendiri; trade tetap memakai σ_mark(util) tetapi tidak pernah menembus mark (FR-14). Konservatif hanya saat stale (FR-36) |
 | D9 | `r` | konstanta 0 vs parameter | **Parameter, default 0.** Biaya nol; menutup pertanyaan "funding basis?" |
 | D10 | Listing | owner-only vs permissionless dengan aturan | **Owner-only untuk MVP.** Permissionless membuka T12 |
 | D11 | Withdrawal cooldown | ya/tidak | **P1.** Sebutkan sebagai jawaban T6; jangan bangun sebelum Hari 11 |
 | D12 | Kirim UI? | ya/tidak | **Hanya jika Hari 12 selesai tepat waktu.** Video bisa memakai output script |
 | D13 | Nama repo publik | — | Hindari kata "oracle" di nama (produk ini justru menghapusnya) |
 | D14 | Fallback otomatis ke `BlackScholesSol` bila panggilan Stylus revert (program tidak aktif) | ya/tidak | **Tidak untuk MVP.** Menambah jalur kode yang sulit diuji di L3; reaktivasi permissionless sudah cukup. Sebutkan sebagai opsi produksi di T7 |
+| D15 | Basis util/cap | kas live vs kapital referensi di-lag | **Di-lag 1 hari, `min(live, snapshot)`.** Biaya: kapital LP baru butuh 1–2 hari untuk memperluas kapasitas; penarikan tetap seketika |
+| D16 | Harga vs mark | inventaris murni vs klem ke mark | **Klem:** beli ≥ mark ≥ tutup. Biaya: pada util > s/(α(1−s)) ≈ 17,5 % (α 0,3; s 5 %) pool tidak lagi membayar premi di atas mid untuk penutupan yang mengurangi risiko |
 
 ---
 

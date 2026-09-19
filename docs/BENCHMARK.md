@@ -21,6 +21,23 @@ programInitGas: uncached=30919 cached=4623 (kolom cached = terukur − 26296, tu
 | ewmaUpdate                                 |     22104 |     40725 |     14429 |   1.5× |
 | markPortfolio 32 seri (1 panggilan)        |   1242892 |    453744 |    427448 |   2.9× |
 
+## Transaksi pool end-to-end (devnode, dua pool identik, `tools/e2e/pool-e2e.sh`)
+
+Pool A memakai `BlackScholesSol` (kontrol), Pool B memakai program Stylus; keduanya di-deploy lewat `EquinoxFactory` oleh `PoolE2EDeployer` dalam satu transaksi, lalu dijalankan dengan input identik lewat `cast` (`forge script` tidak bisa mengeksekusi WASM). Kuotasi (`quoteBuy`, 6 field), NAV, σ_mark, cadangan, dan kas keduanya identik byte-per-byte. Gas = `gasUsed` receipt (L1 fee = 0). Run 19 Sep 2026 setelah gelombang perbaikan (kode commit 6583367: satu evaluasi NAV per `deposit`).
+
+| Operasi | Gas A (kontrol Solidity) | Gas B (Stylus) | Rasio |
+|---|---|---|---|
+| `buy` 10 C 4.200 (ERC-20 + ERC-1155 + 5 panggilan math: 3× `sqrt` + 2× `cappedCall`) | 387.211 | 367.932 | 1,05× |
+| `close` 5 (ERC-20 + ERC-1155 + 5 panggilan math: 3× `sqrt` + 2× `cappedCall`) | 254.792 | 235.533 | 1,08× |
+| `deposit` dengan 6 seri terbuka (NAV via satu `markPortfolio`; 3 panggilan math: 2× `sqrt` + 1× `markPortfolio`) | 219.538 | 220.352 | 0,99× |
+
+Seperti diprediksi PRD §13: transaksi end-to-end didominasi storage EVM, transfer ERC-20/ERC-1155, dan overhead panggilan; keunggulan Stylus pada matematika (2,6–2,9× untuk solver/MtM) hampir tidak terlihat di tingkat transaksi — matematika hanya ≈ 27 % (Solidity) / 23 % (Stylus) dari gas `buy`, dan gas non-matematika kedua pool identik (selisih receipt A − B sama persis dengan selisih jumlah frame `math` di `debug_traceTransaction`). Jumlah panggilan math per baris diverifikasi dengan callTracer pada kedua pool.
+
+Catatan pengukuran:
+- Kolom Stylus memuat premi inisialisasi program **tanpa cache** (`programInitGas` 30.919 vs 4.623 cached; panggilan Stylus pertama dalam satu transaksi ≈ 31k gas untuk `sqrt`, berikutnya ≈ 5k) karena CacheManager devnode adalah stub. Di Sepolia/One dengan program di-cache, kolom B turun ≈ 26k gas per transaksi — keuntungan tambahan yang tidak diklaim di tabel.
+- Baris `deposit` 0,99× (219.538 vs 220.352): dengan satu `markPortfolio` atas satu seri hidup (5 seri lain ber-OI 0 dilewati), kolom Stylus tidak lagi mengamortisasi premi inisialisasi ≈ 31k itu — konsisten dengan temuan Plan 1: loop menang, panggilan tunggal kecil tidak. Sebelum gelombang perbaikan (NAV dievaluasi dua kali per `deposit`) baris ini 291.893 vs 263.429 (1,10×). Per panggilan di dalam trace yang sama Stylus tetap lebih murah — `cappedCall` 50.899 vs 22.586 (2,25×), `markPortfolio` 6 seri 56.343 vs 23.277 (2,42×), angka Stylus untuk panggilan non-pertama (trace Task 7, sebelum gelombang perbaikan; kontrak `math` tidak berubah).
+- Harness mengirim transaksi A dan B berurutan; sepasang bisa mengapit batas detik wall-clock devnode sehingga waktu-ke-expiry berbeda 1 detik dan NAV/kas berbeda beberapa ratus unit 1e-6 USDG (terlihat pada satu dari tiga run setelah gelombang perbaikan: Δ 381 unit pada pasangan `close`; tiga run Task 7 sebelumnya bersih). Pemeriksaan identitas hanya sah untuk pasangan yang mendarat di blok dengan timestamp sama — run yang miring cukup diulang. Gas bervariasi ≤ 0,15 % antar run; rasio stabil.
+
 ## Micro-benchmark biaya marjinal (gas per pasangan mul_wad + div_wad, loop 1.000 iterasi)
 
 Program micro-benchmark (loop 1.000 iterasi) berasal dari spike 19 Sep 2026 dan tidak disertakan di repo; angkanya tidak dapat direproduksi dari tooling repo ini.

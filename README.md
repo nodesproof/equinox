@@ -12,10 +12,10 @@ Built for the Arbitrum Open House Singapore Online Buildathon (2026).
 |---|---|
 | Quant core: Black-Scholes + Greeks, capped call, implied-vol solver, EWMA volatility, batch mark-to-market — in Python (executable spec), Rust/Stylus (production) and Solidity (control), all **bit-identical** | ✅ done, tested, deployed to a local Nitro devnode, benchmarked |
 | Stylus program `bs-stylus` (`cargo stylus check` passes on Arbitrum Sepolia) | ✅ done |
-| Pool contracts: LP vault (ERC-4626), option series (ERC-1155), buy/close, settlement, claims, volatility engine | ⏳ next (Plan 2) |
+| Pool contracts: LP vault (ERC-4626), option series (ERC-1155), buy/close, settlement, claims, volatility engine, two-level factory | ✅ done — 80 Foundry tests in 6 suites (68 on the pool, vol engine, option token and oracle, incl. 7 invariants: 32 runs × depth 128 in CI, 256 × 200 = 51,200 calls each in the long run), 93.4 % line coverage on `src/pool` + `src/oracle` (428/458 lines), three audit rounds plus a final fix wave; two identical pools (control vs Stylus) verified byte-identical on a devnode |
 | Demo, UI, Sepolia deployment | ⏳ Plan 3 |
 
-So today this repository is the **pricing engine and its verification tooling**, not yet a tradable venue. The full product specification lives in [`prd-arsitektur.md`](prd-arsitektur.md) (Indonesian).
+The pricing engine and the pool are implemented and verified; a demo, UI and testnet deployment are next (Plan 3). The full product specification lives in [`prd-arsitektur.md`](prd-arsitektur.md) (Indonesian).
 
 ## Why
 
@@ -26,7 +26,7 @@ So today this repository is the **pricing engine and its verification tooling**,
 ## How it works
 
 ```
- Chainlink ETH/USD ──► EquinoxVolEngine ── σ_base = EWMA realized vol      (Plan 2)
+ Chainlink ETH/USD ──► EquinoxVolEngine ── σ_base = EWMA realized vol
                         σ_mark = σ_base × VRP × (1 + α · inventory)
                                    │
  trader ── buy/close ──► EquinoxPool (EVM, USDG, ERC-1155 series) ──STATICCALL──► black_scholes (Stylus, Rust)
@@ -38,6 +38,8 @@ So today this repository is the **pricing engine and its verification tooling**,
 - **Pricing:** Black-Scholes with five Greeks per quote; calls priced as the spread `C(K) − C(2K)` so the reserve is exactly `K` per unit (the cap costs buyers < 0.001 % of premium for 7–30 day tenors at normal ETH volatility).
 - **Volatility without an oracle:** `σ_base` is an EWMA of log-returns between Chainlink rounds (irregular Δt handled); inventory impact raises σ when the pool is net short vega, and a symmetric spread makes round-trips non-free.
 - **Numerics:** WAD (1e18) fixed point on `I256`; `exp`/`ln`/`sqrt` are bit-exact ports of PRBMath v4; Φ uses Cody's rational erfc approximation (≤ 1e-16 abs error); no floating point anywhere. Solver: safeguarded Newton (bracket + bisection), 3–20 iterations across the domain.
+- **Pool (Plan 2, done):** `EquinoxPool` is an ERC-4626 vault over USDG that lists boards (Friday 08:00 UTC expiries, whole-USDG strikes in `[S/2, 2S]`), sells and buys back series priced at `σ_mark(util)` with a sign-aware spread, and settles permissionlessly against whatever fresh post-expiry Chainlink round exists when `settle` is called (an operator must run a keeper; the bounty is an incentive, not a guarantee). NAV is marked at `σ_mark(0)` (no inventory impact — a NAV marked at `σ_mark(util)` is sandwichable by deposit/redeem), blackout/expired series are marked at intrinsic, and trades never cross that mark (buy ≥ mark ≥ close), so no trade can lower NAV. Utilisation and vega caps use a capital reference lagged by one day (`min(live, 1-day-old snapshot)`): new deposits expand trading capacity after 1–2 days, withdrawals shrink it immediately.
+- **Pool safety posture and requirements:** `nonReentrant` on all eight state-changing entry points (`buy`/`close`/`settle`/`claim` and the four ERC-4626 entries), checks-effects-interactions, `Ownable2Step` owner (no timelock — recommended for production), hard bounds on every config and vol parameter (vol parameters also rate-limited), and fail-closed on a stale oracle or a dead math program (withdraw/redeem continue on a conservative NAV; deposit/mint revert). NAV is evaluated once per ERC-4626 call through a transient-storage memo (EIP-1153), so the pool needs Arbitrum ArbOS ≥ 20 (the devnode runs ArbOS 61) and solc ≥ 0.8.28 with the cancun EVM. The factory is two-level (`EquinoxFactory` → `PoolDeployer` → `new EquinoxPool`) because of the 24,576-byte code limit; CI fails on a negative runtime margin (`forge build --sizes`).
 
 ## Repository layout
 
@@ -47,10 +49,12 @@ So today this repository is the **pricing engine and its verification tooling**,
 | `stylus/bs-math/` | Pure `no_std` Rust crate (`I256`/`U256` only): `fixed`, `exp`, `ln`, `normal`, `bs`, `solver`, `ewma`, `portfolio`; 23 tests asserting exact equality with the vectors |
 | `stylus/bs-stylus/` | Stateless Stylus program wrapping `bs-math` with a Solidity ABI (`view` only, typed errors) |
 | `contracts/` | Foundry project: `src/interfaces/IBlackScholes.sol` (exported from Stylus), `src/math/BlackScholesSol.sol` (control implementation on PRBMath v4), `src/Bench.sol` (gas harness); 12 exact-equality tests |
+| `contracts/src/pool/`, `contracts/src/oracle/` | `EquinoxPool` (ERC-4626 vault + options AMM), `EquinoxVolEngine`, `EquinoxOptionToken`, two-level `EquinoxFactory`, `OracleLib`; tests under `contracts/test/` incl. invariants (`EquinoxPool.invariants.t.sol`) and the `PoolFixture`; `src/mocks/` holds `MockUSDG`, `MockFeed`, `MockSequencerFeed`, `MockSwitchableMath` and the E2E deployer |
 | `tools/devnode/` | `up.sh` — local Nitro devnode with automatic ArbOS 61 (Stylus v3) upgrade; `deploy.sh` — deploys the Stylus program, the control and the harness to any RPC |
 | `tools/bench/` | `onchain-check.sh` — 20 bit-exact on-chain checks against the Python spec (both implementations); `bench.sh` — apples-to-apples gas table with return-bytes parity |
+| `tools/e2e/` | `pool-e2e.sh` — deploys two identical pools on a live node (control vs Stylus), runs deposit → board → buy → close → deposit on both, asserts byte-identical quotes/NAV/σ/reserves/cash and prints the pool gas rows |
 | `docs/` | `BENCHMARK.md` (measured results), `VERIFICATION.md` (day-1 environment checks), `superpowers/plans/` (implementation plans) |
-| `prd-arsitektur.md` | PRD & technical architecture v1.2 (Indonesian) |
+| `prd-arsitektur.md` | PRD & technical architecture v1.3 (Indonesian) |
 
 ## One algorithm, three implementations, one truth
 
@@ -62,7 +66,7 @@ wad_emul.py (exact integers)  ──gen_vectors.py──►  vectors_gen.rs / Ve
                                                         Stylus program  ==  Solidity control  ==  spec
 ```
 
-CI regenerates the constants and vectors and fails on any drift, runs both test suites, builds the WASM and runs `cargo stylus check` against Sepolia.
+CI regenerates the constants and vectors and fails on any drift, runs both test suites, builds the WASM, runs `cargo stylus check` against Sepolia, and enforces the EIP-170 size limit (`forge build --sizes` — every runtime margin must be positive; `PoolDeployer` embeds the pool's initcode and has ≈ 1.5 KB left).
 
 ## Benchmark (measured, not estimated)
 
@@ -76,6 +80,8 @@ Local Nitro devnode (`offchainlabs/nitro-node:v3.11.4`, ArbOS 61 / Stylus v3), g
 | `markPortfolio`, 32 series, one call | 1,242,892 | 453,744 | 427,448 | 2.9× |
 
 Take-aways: Stylus wins on loop-heavy work (solver, batch mark-to-market) by 2.6–2.9× and loses on single calls unless the program is cached (fixed init cost ≈ 31k gas, 5k when cached). 256-bit fixed-point arithmetic itself is ~3× *more* expensive in WASM than the EVM's native `MUL`/`DIV`; the savings come from control flow, loops and ABI handling. Not 10×. The 1 MiB default Rust stack costs 17 memory pages per call — this repo pins the stack to 16 KiB.
+
+At the transaction level the difference almost disappears: on two identical pools `buy` is 387,211 vs 367,932 gas (1.05×), `close` 254,792 vs 235,533 (1.08×) and a `deposit` with six open series 219,538 vs 220,352 (0.99× — a single `markPortfolio` over one live series no longer amortises the uncached init cost). Storage and token transfers dominate; math is ≈ 23–27 % of a `buy`. Rows, method and caveats in [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 
 ## Getting started
 
@@ -92,13 +98,14 @@ cd stylus/bs-math && cargo test && cd ../..    # 23 passed
 cd stylus/bs-stylus && cargo stylus check --endpoint https://sepolia-rollup.arbitrum.io/rpc && cd ../..
 
 # 4. Solidity control
-cd contracts && forge test && cd ..            # 12 passed
+cd contracts && forge test && cd ..            # 80 passed (6 suites: math control, oracle, token, vol engine, pool, invariants)
 
 # 5. Local devnode: deploy both implementations, verify on-chain, benchmark
 tools/devnode/up.sh                            # terminal 1 (blocking); prints "devnode siap: ..."
 tools/devnode/deploy.sh devnode http://127.0.0.1:8547 0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659
 tools/bench/onchain-check.sh deployments/devnode.json   # 20 × OK
 tools/bench/bench.sh deployments/devnode.json           # gas table
+tools/e2e/pool-e2e.sh deployments/devnode.json 0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659   # two identical pools, control vs Stylus
 ```
 
 Regenerate constants and vectors after touching `wad_emul.py` (CI checks they are byte-identical to the generator output):
@@ -128,8 +135,8 @@ Errors: `OutOfDomain(uint8 arg)`, `NoConvergence(uint8 iters)`, `LengthMismatch(
 
 ## Roadmap
 
-- **Plan 2 — pool:** `EquinoxPool` (ERC-4626 over USDG, boards/series as ERC-1155, buy/close, settlement, claims, mark-to-market NAV), `EquinoxVolEngine`, factory, invariants (solvency fuzzed).
-- **Plan 3 — demo & submission:** two identical pools (Solidity control vs Stylus) side by side, Sepolia deployment, video.
+- **Plan 2 — pool (done):** `EquinoxPool` (ERC-4626 over USDG, boards/series as ERC-1155, buy/close, settlement, claims, mark-to-market NAV), `EquinoxVolEngine`, two-level factory, invariants (solvency fuzzed), two identical pools verified on a devnode.
+- **Plan 3 — demo & submission:** Sepolia deployment of both pools, demo script/UI, video. Not built (P1): withdrawal cooldown, strike skew, `minListingDelta`, `EquinoxLens`.
 - **After the hackathon:** `i128` Q64.64 internals (measured ~3.6× cheaper per multiply than `I256`), program caching on Arbitrum One, delta hedging via perps, BTC/USDG, options on tokenized equities.
 
 ## License
