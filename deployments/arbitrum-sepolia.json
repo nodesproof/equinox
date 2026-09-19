@@ -1,0 +1,13 @@
+{
+  "network": "arbitrum-sepolia",
+  "rpc": "https://sepolia-rollup.arbitrum.io/rpc",
+  "chainId": 421614,
+  "arbOSVersion": 116,
+  "stylusVersion": 3,
+  "blackScholesStylus": "0xb3b37050a40b9755001bddd29cc5df17a59f51d4",
+  "blackScholesSol": "0x5B239AE1510AED1Bb21EB9d2e8A471D45720c4B3",
+  "bench": "0x5801Aa89eAdABDE9ea21D2e26858760F8B71f346",
+  "programInitGas": "30919 4623",
+  "programMemoryFootprintPages": 1,
+  "deployedAt": "2026-09-19T22:10:52Z"
+}

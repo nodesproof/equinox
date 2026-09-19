@@ -3,7 +3,7 @@
 Lingkungan: `nitro-devnode` `offchainlabs/nitro-node:v3.11.4-7d5ac27` di-upgrade ke ArbOS 61 (Stylus v3), L1 fee = 0;
 `cargo-stylus`/`stylus-sdk` 0.10.9, rustc 1.92, `opt-level = 3`, stack 16 KiB, 2 fragmen, tanpa cache;
 kontrol `solc 0.8.28` via-IR (200 runs), PRBMath v4.1.0. Pengukuran: `gasleft()` di sekitar `STATICCALL` dari `Bench.sol`.
-Kolom "cached" = terukur − (programInitGas uncached − cached), turunan (CacheManager devnode adalah stub).
+Kolom "cached" = terukur − (programInitGas uncached − cached), turunan (CacheManager devnode adalah stub). Turunan ini dikonfirmasi langsung di Arbitrum Sepolia dengan program yang benar-benar cached — identik sampai satuan gas (bagian "Verifikasi di Arbitrum Sepolia" di bawah).
 Angka di PRD §13 berasal dari build spike (WASM 34.346 byte; programInitGas 31.333/4.961; tabel referensi di rencana Task 14 memakai 31.376/4.997). Build repo ini: lihat baris programInitGas di bawah — selisih sel ≤ ~2% pada kolom terukur dan hingga ~5% pada kolom turunan; kesimpulan tidak berubah.
 Setiap operasi yang di-benchmark menghasilkan bytes return yang identik pada kedua implementasi (dibandingkan otomatis oleh tools/bench/bench.sh); 20 pemeriksaan bit-eksak tambahan terhadap emulasi Python ada di tools/bench/onchain-check.sh.
 
@@ -20,6 +20,26 @@ programInitGas: uncached=30919 cached=4623 (kolom cached = terukur − 26296, tu
 | impliedVol P2600 deep-OTM (20 iterasi)     |    616839 |    249669 |    223373 |   2.8× |
 | ewmaUpdate                                 |     22104 |     40725 |     14429 |   1.5× |
 | markPortfolio 32 seri (1 panggilan)        |   1242892 |    453744 |    427448 |   2.9× |
+
+## Verifikasi di Arbitrum Sepolia (program cached)
+
+Deploy 20 Sep 2026 (`deployments/arbitrum-sepolia.json`, chain 421614, ArbOS 116 / Stylus v3): program Stylus `0xb3b37050a40b9755001bddd29cc5df17a59f51d4` (34.414 byte, 2 fragmen; data fee aktivasi 0,000152 ETH = 0,000126 ETH + bump 20 %), `BlackScholesSol` `0x5B239AE1510AED1Bb21EB9d2e8A471D45720c4B3`, `Bench` `0x5801Aa89eAdABDE9ea21D2e26858760F8B71f346`. `programInitGas` 30.919/4.623 dan 1 halaman memori — identik dengan devnode. `tools/bench/onchain-check.sh deployments/arbitrum-sepolia.json`: 20 × OK (bit-eksak terhadap emulasi Python, kedua implementasi).
+
+`cargo stylus cache bid <program> 0` diterima (`ArbWasmCache.codehashIsCached == true`), sehingga kolom "cached" dapat diukur langsung, bukan diturunkan:
+
+| Operasi | Solidity (kontrol) | Stylus cached, terukur di Sepolia | Kolom turunan devnode | Rasio cached |
+|---|---|---|---|---|
+| normCdf(-0.5456) | 5435 | 8327 | 8327 | 0,7× |
+| exp(-1) | 6144 | 8960 | 8960 | 0,7× |
+| ln(2) | 3559 | 7678 | 7678 | 0,5× |
+| quote C4200 7d 60% (harga+4 Greeks) | 24536 | 14837 | 14837 | 1,7× |
+| cappedCall C4200 cap 8400 | 40886 | 20215 | 20215 | 2,0× |
+| impliedVol C4200 (5 iterasi) | 121321 | 47189 | 47189 | 2,6× |
+| impliedVol P2600 deep-OTM (20 iterasi) | 616839 | 223373 | 223373 | 2,8× |
+| ewmaUpdate | 22104 | 14429 | 14429 | 1,5× |
+| markPortfolio 32 seri (1 panggilan) | 1242892 | 427448 | 427448 | 2,9× |
+
+Semua sembilan sel terukur sama persis dengan turunan `terukur − 26.296` dari devnode, dan kolom Solidity juga identik — kesimpulan §13 PRD tidak berubah: 2,6–2,9× pada lingkaran (solver, MtM), < 1× untuk panggilan tunggal kecil. Catatan alat: `tools/bench/bench.sh` pada deployment yang sudah cached mencetak angka cached di kolom "tanpa cache" dan kolom "turunan"-nya menjadi negatif (mengurangkan 26.296 dua kali) — untuk deployment cached, baca kolom terukur saja.
 
 ## Transaksi pool end-to-end (devnode, dua pool identik, `tools/e2e/pool-e2e.sh`)
 

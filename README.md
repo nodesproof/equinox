@@ -13,7 +13,8 @@ Built for the Arbitrum Open House Singapore Online Buildathon (2026).
 | Quant core: Black-Scholes + Greeks, capped call, implied-vol solver, EWMA volatility, batch mark-to-market — in Python (executable spec), Rust/Stylus (production) and Solidity (control), all **bit-identical** | ✅ done, tested, deployed to a local Nitro devnode, benchmarked |
 | Stylus program `bs-stylus` (`cargo stylus check` passes on Arbitrum Sepolia) | ✅ done |
 | Pool contracts: LP vault (ERC-4626), option series (ERC-1155), buy/close, settlement, claims, volatility engine, two-level factory | ✅ done — 80 Foundry tests in 6 suites (68 on the pool, vol engine, option token and oracle, incl. 7 invariants: 32 runs × depth 128 in CI, 256 × 200 = 51,200 calls each in the long run), 93.4 % line coverage on `src/pool` + `src/oracle` (428/458 lines), three audit rounds plus a final fix wave; two identical pools (control vs Stylus) verified byte-identical on a devnode |
-| Demo, UI, Sepolia deployment | ⏳ Plan 3 |
+| Math on Arbitrum Sepolia: Stylus program (cached), Solidity control and `Bench` | ✅ deployed 20 Sep 2026 — 20/20 on-chain exactness checks; cached-program gas measured directly and equal to the devnode-derived column; addresses in `deployments/arbitrum-sepolia.json` |
+| Demo, UI, pool deployment on Sepolia | ⏳ Plan 3 |
 
 The pricing engine and the pool are implemented and verified; a demo, UI and testnet deployment are next (Plan 3). The full product specification lives in [`prd-arsitektur.md`](prd-arsitektur.md) (Indonesian).
 
@@ -115,7 +116,7 @@ python3 tools/reference/gen_constants.py stylus/bs-math/src/constants.rs contrac
 python3 tools/reference/gen_vectors.py stylus/bs-math/tests/common/vectors_gen.rs contracts/test/VectorsGen.sol
 ```
 
-Deploy to Arbitrum Sepolia with a funded key: `tools/devnode/deploy.sh arbitrum-sepolia https://sepolia-rollup.arbitrum.io/rpc <private-key>`, then run `onchain-check.sh` on the produced `deployments/arbitrum-sepolia.json`.
+The math is already deployed on Arbitrum Sepolia (`deployments/arbitrum-sepolia.json`: Stylus program `0xb3b37050a40b9755001bddd29cc5df17a59f51d4`, cached; `BlackScholesSol` `0x5B239AE1510AED1Bb21EB9d2e8A471D45720c4B3`; `Bench` `0x5801Aa89eAdABDE9ea21D2e26858760F8B71f346`). Verify it yourself with `tools/bench/onchain-check.sh deployments/arbitrum-sepolia.json` (read-only, 20 × OK) or `tools/bench/bench.sh deployments/arbitrum-sepolia.json` (the program is cached there, so read the measured column). To redeploy with your own funded key, put it in a git-ignored `.env` (`SEPOLIA_PRIVATE_KEY=0x…`, `SEPOLIA_RPC_URL=…`) and run `tools/devnode/deploy.sh arbitrum-sepolia "$SEPOLIA_RPC_URL" "$SEPOLIA_PRIVATE_KEY"`; if the Stylus step fails with "max fee per gas less than block base fee", re-run with `STYLUS_MAX_FEE_GWEI=1` (the script now aborts before deploying the Solidity contracts when the Stylus deploy fails); caching is a separate `cargo stylus cache bid <program> 0` from `stylus/bs-stylus`.
 
 ## On-chain interface
 
