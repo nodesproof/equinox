@@ -18,10 +18,10 @@ pub fn ewma_update(var_prev: I256, p_prev: I256, p_now: I256, dt_seconds: I256, 
     if p_now <= I256::ZERO { return Err(MathError::OutOfDomain(2)); }
     if dt_seconds <= I256::ZERO { return Err(MathError::OutOfDomain(3)); }
     if lambda_per_day <= I256::ZERO || lambda_per_day >= WAD { return Err(MathError::OutOfDomain(4)); }
-    let dt_days = dt_seconds * WAD / i(SECONDS_PER_DAY);
+    let dt_days = dt_seconds.checked_mul(WAD).ok_or(MathError::Overflow)? / i(SECONDS_PER_DAY);
     let w = exp_wad(mul_wad(dt_days, ln_wad(lambda_per_day)?)?)?;
     let r = ln_wad(div_wad(p_now, p_prev)?)?;
-    let dt_years = dt_seconds * WAD / i(SECONDS_PER_YEAR);
+    let dt_years = dt_seconds.checked_mul(WAD).ok_or(MathError::Overflow)? / i(SECONDS_PER_YEAR);
     let inst = div_wad(mul_wad(r, r)?, dt_years)?;
     Ok(mul_wad(w, var_prev)? + mul_wad(WAD - w, inst)?)
 }

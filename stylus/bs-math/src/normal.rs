@@ -10,7 +10,7 @@ pub fn erfc_wad(x: I256) -> Result<I256, MathError> {
     let y = if x.is_negative() { -x } else { x };
     let four = i(4) * WAD;
     let r = if y <= i(CODY_THRESH) {
-        let ysq = if y > i(111_000) { mul_wad(y, y)? } else { I256::ZERO }; // 1.11e-16 → 111000 wei
+        let ysq = if y > i(111_000) { mul_wad(y, y)? } else { I256::ZERO }; // 111000 wei; mul_wad(y,y) = 0 untuk y < 1e9 wei, jadi cabang ini hanya menghindari pekerjaan sia-sia
         let mut xnum = mul_wad(i(CODY_A[4]), ysq)?;
         let mut xden = ysq;
         for k in 0..3 {

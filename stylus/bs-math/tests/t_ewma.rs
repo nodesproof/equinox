@@ -17,3 +17,10 @@ fn ewma_domain() {
     assert_eq!(ewma_update(v, p, p, I256::ZERO, WAD / i(2)).unwrap_err(), MathError::OutOfDomain(3));
     assert_eq!(ewma_update(v, p, p, i(60), WAD).unwrap_err(), MathError::OutOfDomain(4));
 }
+#[test]
+fn ewma_dt_overflow_is_typed() {
+    // dt·1e18 harus melampaui 2^255 (≈ 5,8e76): dt = 1e63 → 1e81. Tanpa checked_mul: panic (debug) / wrap (release).
+    let v = WAD / i(4); let p = i(4000) * WAD; let lam = WAD / i(2);
+    let dt = i(1_000_000_000_000_000_000) * i(1_000_000_000_000_000_000) * i(1_000_000_000_000_000_000) * i(1_000_000_000);
+    assert_eq!(ewma_update(v, p, p, dt, lam), Err(MathError::Overflow));
+}

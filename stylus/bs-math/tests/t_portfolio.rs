@@ -1,7 +1,20 @@
-//! Task 10: batch mark-to-market — Σ sama dengan jumlah kuotasi individual, FR-8.
+//! Task 10: batch mark-to-market — Σ sama dengan jumlah kuotasi individual, FR-8; bit-eksak vs emulasi Python.
+mod common;
 use bs_math::fixed::{i, mul_wad, WAD};
 use bs_math::{capped_call, mark_portfolio, quote, I256, MathError};
+use common::vectors_gen::PORTFOLIO;
 
+#[test]
+fn portfolio_bit_exact() {
+    // Oracle lintas-implementasi: (Σ oi·mid, Σ oi·vega) == mark_portfolio_wad (tools/reference/wad_emul.py).
+    let conv = |v: &[i128]| v.iter().map(|&x| i(x)).collect::<Vec<I256>>();
+    for (ci, &(k, t, c, oi, s, r, sg, cm, sum_mid, sum_vega)) in PORTFOLIO.iter().enumerate() {
+        let (k, t, oi) = (conv(k), conv(t), conv(oi));
+        let (mid, vega) = mark_portfolio(i(s), i(r), i(sg), i(cm), &k, &t, c, &oi).unwrap();
+        assert_eq!(mid, i(sum_mid), "sum_mid kasus {ci}");
+        assert_eq!(vega, i(sum_vega), "sum_vega kasus {ci}");
+    }
+}
 #[test]
 fn portfolio_equals_sum_of_quotes() {
     let s = i(4000) * WAD; let r = I256::ZERO; let sg = i(6) * WAD / i(10); let t7 = i(7) * WAD / i(365);
