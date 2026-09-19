@@ -1,0 +1,13 @@
+[package]
+name = "bs-math"
+version = "0.1.0"
+edition = "2021"
+description = "Pure no_std Black-Scholes math in WAD fixed point (I256), bit-identical to PRBMath exp/ln/sqrt"
+license = "MIT"
+
+[dependencies]
+alloy-primitives = { version = "1", default-features = false }
+
+[features]
+default = []
+std = ["alloy-primitives/std"]

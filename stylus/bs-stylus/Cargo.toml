@@ -1,0 +1,29 @@
+[package]
+name = "bs-stylus"
+version = "0.1.0"
+edition = "2024"
+description = "Stateless Stylus program exposing bs-math (Black-Scholes, Greeks, IV solver, EWMA) with a Solidity ABI"
+license = "MIT"
+
+[dependencies]
+alloy-primitives = { version = "1.5.7", default-features = false }
+alloy-sol-types = { version = "1.5.7", default-features = false }
+stylus-sdk = "0.10.9"
+bs-math = { path = "../bs-math" }
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[features]
+default = ["mini-alloc"]
+export-abi = ["stylus-sdk/export-abi"]
+debug = ["stylus-sdk/debug"]
+mini-alloc = ["stylus-sdk/mini-alloc"]
+contract-client-gen = []
+
+[profile.release]
+codegen-units = 1
+strip = true
+lto = true
+panic = "abort"
+opt-level = 3
