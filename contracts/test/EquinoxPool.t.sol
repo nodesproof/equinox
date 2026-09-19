@@ -439,6 +439,10 @@ contract EquinoxPoolTest is PoolFixture {
         vm.prank(lp);
         p2.deposit(1e6, lp);
 
+        vm.expectRevert(EquinoxPool.MathUnavailable.selector);
+        vm.prank(lp);
+        p2.mint(1e6, lp); // same guard on the mint entry point
+
         vm.prank(lp);
         p2.withdraw(1000e6, lp, lp); // withdraw still works on the conservative NAV
 
@@ -887,6 +891,83 @@ contract EquinoxPoolTest is PoolFixture {
         pool.redeem(shares, attacker, attacker);
         vm.stopPrank();
         assertLe(usdg.balanceOf(attacker), 20_000_000e6 + settleBounty, "JIT settle sandwich must not profit beyond the bounty");
+    }
+
+    /// @dev Shared state for the single-NAV-evaluation tests: 1M LP, 7-day board (6 open series), one open position so
+    ///      the mark is non-trivial, and a second funded LP for the entry under test. `markPortfolio` is only ever
+    ///      reached through the NAV path, so counting its calls counts NAV evaluations.
+    function _sixOpenSeries() internal returns (address lp2) {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        traderBuy(sid(expiry, 4200e18, true), 10e18);
+        assertEq(pool.openSeriesIds().length, 6);
+        lp2 = makeAddr("lp2");
+        usdg.mint(lp2, 1_000_000e6);
+        vm.prank(lp2);
+        usdg.approve(address(pool), type(uint256).max);
+    }
+
+    function _markPortfolioCall() internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(IBlackScholes.markPortfolio.selector);
+    }
+
+    /// I-3 (final review): each ERC-4626 entry point evaluates the NAV (one `markPortfolio`) exactly once, and the
+    /// amount it returns is exactly the preview computed just before it (the memoised NAV is the NAV the preview
+    /// saw). One test per entry point because `expectCall` counts are verified at the end of a test.
+    function test_nav_evaluated_once_per_entry_deposit() public {
+        address lp2 = _sixOpenSeries();
+        uint256 expected = pool.previewDeposit(100_000e6);
+        vm.expectCall(address(mathSol), _markPortfolioCall(), 1);
+        vm.prank(lp2);
+        uint256 shares = pool.deposit(100_000e6, lp2);
+        assertEq(shares, expected, "deposit returns previewDeposit(assets)");
+    }
+
+    function test_nav_evaluated_once_per_entry_mint() public {
+        address lp2 = _sixOpenSeries();
+        uint256 expected = pool.previewMint(100_000e6);
+        vm.expectCall(address(mathSol), _markPortfolioCall(), 1);
+        vm.prank(lp2);
+        uint256 assets = pool.mint(100_000e6, lp2);
+        assertEq(assets, expected, "mint costs previewMint(shares)");
+    }
+
+    function test_nav_evaluated_once_per_entry_withdraw() public {
+        _sixOpenSeries();
+        uint256 expected = pool.previewWithdraw(100_000e6);
+        vm.expectCall(address(mathSol), _markPortfolioCall(), 1);
+        vm.prank(lp);
+        uint256 shares = pool.withdraw(100_000e6, lp, lp);
+        assertEq(shares, expected, "withdraw burns previewWithdraw(assets)");
+    }
+
+    function test_nav_evaluated_once_per_entry_redeem() public {
+        _sixOpenSeries();
+        uint256 expected = pool.previewRedeem(100_000e6);
+        vm.expectCall(address(mathSol), _markPortfolioCall(), 1);
+        vm.prank(lp);
+        uint256 assets = pool.redeem(100_000e6, lp, lp);
+        assertEq(assets, expected, "redeem returns previewRedeem(shares)");
+    }
+
+    /// ERC-4626 `mint` (previously untested anywhere): on a non-trivial NAV the caller pays exactly previewMint(shares)
+    /// (rounded up, toward the pool -- never below the floor conversion), receives exactly `shares`, and the pool's
+    /// cash grows by the same amount.
+    function test_mint_matches_preview() public {
+        address lp2 = _sixOpenSeries();
+        uint256 shares = 123_456_789_012;
+        uint256 expected = pool.previewMint(shares);
+        uint256 floorAssets = pool.convertToAssets(shares);
+        assertGe(expected, floorAssets, "previewMint rounds toward the pool");
+        assertGt(expected, shares, "NAV per share > 1 after the spread was realised");
+        uint256 balBefore = usdg.balanceOf(lp2);
+        uint256 cashBefore = usdg.balanceOf(address(pool));
+        vm.prank(lp2);
+        uint256 paid = pool.mint(shares, lp2);
+        assertEq(paid, expected, "mint costs previewMint");
+        assertEq(pool.balanceOf(lp2), shares, "exact shares minted");
+        assertEq(balBefore - usdg.balanceOf(lp2), paid, "caller pays exactly what mint returns");
+        assertEq(usdg.balanceOf(address(pool)) - cashBefore, paid, "pool receives it");
     }
 
     // ------------------------------------------------------------ access control & re-entrancy (Task 6)

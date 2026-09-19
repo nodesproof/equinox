@@ -105,6 +105,17 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     mapping(uint256 => Series) public series;
     Board[] internal _boards;
     uint256[] internal _openSeriesIds;
+    /// @dev Memo NAV (unit aset, disimpan `nav + 1`; 0 = kosong) yang hidup hanya selama satu transaksi (EIP-1153,
+    ///      `transient`). `deposit`/`mint`/`withdraw`/`redeem` menghitung NAV sekali lewat `_navWad()`, menyimpannya di
+    ///      sini, lalu `totalAssets()` — yang dipanggil OpenZeppelin lewat `preview*`/`max*` di dalam alur yang sama —
+    ///      mengembalikan memo alih-alih mengevaluasi ulang `markPortfolio` (I-3 review akhir: ≈ 57k gas Solidity /
+    ///      28k Stylus terbuang per deposit dengan 6 seri terbuka; ≈ 300k pada 32 seri). Memo selalu dikosongkan
+    ///      sebelum entry point mengembalikan nilai; revert mengembalikan transient storage, jadi panggilan yang gagal
+    ///      tidak pernah meninggalkan memo basi. `nonReentrant` pada keempat entry point menjamin memo tidak pernah bisa
+    ///      diamati pemanggil lain di tengah alur (USDG dan token share tidak punya hook — guard membuatnya jaminan,
+    ///      bukan asumsi). Ketergantungan: transient storage tersedia di Arbitrum sejak ArbOS 20 (devnode: ArbOS 61);
+    ///      kata kunci `transient` butuh solc >= 0.8.28 dengan EVM cancun.
+    uint256 private transient _navMemo;
 
     // ---------------------------------------------------------------- events
     event BoardCreated(uint256 indexed boardId, uint64 expiry, uint256[] seriesIds);
@@ -165,52 +176,78 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     ///         berubah pada deposit/redeem di blok yang sama (C-1). Kuotasi trading (`quoteBuy`/`quoteClose`) tetap
     ///         memakai dampak inventaris seperti semula.
     ///         Saat oracle stale atau `vol`/`math` gagal: NAV konservatif = cash − escrow − reserved (FR-36).
+    /// @dev Di dalam `deposit`/`mint`/`withdraw`/`redeem` mengembalikan memo transient `_navMemo` (satu evaluasi NAV
+    ///      per entry point); di luar itu mengevaluasi `_navWad()` seperti biasa.
     function totalAssets() public view override returns (uint256) {
+        uint256 memo = _navMemo;
+        if (memo != 0) return memo - 1;
+        (uint256 nav, ) = _navWad();
+        return nav;
+    }
+
+    /// @dev Evaluasi NAV penuh (unit aset) + flag `conservative` dari `_liabilityWad` (FR-36).
+    function _navWad() internal view returns (uint256 navAssets, bool conservative) {
         uint256 cash = IERC20(asset()).balanceOf(address(this)) * assetScale;
         uint256 base = cash > escrowedPayouts ? cash - escrowedPayouts : 0;
-        (uint256 liability, ) = _liabilityWad();
+        uint256 liability;
+        (liability, conservative) = _liabilityWad();
         uint256 nav = base > liability ? base - liability : 0;
-        return nav / assetScale;
+        navAssets = nav / assetScale;
     }
 
     /// @dev Menolak deposit/mint saat `vol`/`math` sedang gagal — mencegah mint pada NAV konservatif lalu redeem
     ///      pada NAV MtM begitu math pulih (I-1b). Withdraw/redeem tetap berjalan di atas NAV konservatif.
     ///      Me-refresh referensi kapital (R2-a) & poke vol engine (R2-b) sebelum apa pun lain; deposit/mint pertama
     ///      langsung membootstrap referensi kapital agar LP pertama dihitung seketika, bukan setelah lag.
-    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+    ///      NAV dievaluasi SEKALI (`_navWad`) — sekaligus guard `MathUnavailable` — lalu dimemo di `_navMemo` untuk
+    ///      `previewDeposit`/`previewMint` di dalam `super.*` (lihat `_navMemo`); memo dikosongkan sebelum kembali.
+    function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256) {
         _refreshCapitalRef();
         _pokeVol();
         _requireFresh();
-        (, bool conservative) = _liabilityWad();
+        (uint256 nav, bool conservative) = _navWad();
         if (conservative) revert MathUnavailable();
+        _navMemo = nav + 1;
         uint256 shares = super.deposit(assets, receiver);
+        _navMemo = 0;
         _bootstrapCapitalRef();
         return shares;
     }
 
-    function mint(uint256 shares, address receiver) public override returns (uint256) {
+    function mint(uint256 shares, address receiver) public override nonReentrant returns (uint256) {
         _refreshCapitalRef();
         _pokeVol();
         _requireFresh();
-        (, bool conservative) = _liabilityWad();
+        (uint256 nav, bool conservative) = _navWad();
         if (conservative) revert MathUnavailable();
+        _navMemo = nav + 1;
         uint256 assets = super.mint(shares, receiver);
+        _navMemo = 0;
         _bootstrapCapitalRef();
         return assets;
     }
 
     /// @dev Refresh referensi kapital (R2-a) & poke vol engine (R2-b) sebelum delegasi; withdraw/redeem tidak
     ///      pernah dijeda dan tidak pernah butuh `math`/`vol` sukses (NAV konservatif tetap dipakai bila gagal).
-    function withdraw(uint256 assets, address receiver, address owner_) public override returns (uint256) {
+    ///      NAV dievaluasi sekali dan dimemo untuk `maxWithdraw`/`maxRedeem` + `preview*` di dalam `super.*`.
+    function withdraw(uint256 assets, address receiver, address owner_) public override nonReentrant returns (uint256) {
         _refreshCapitalRef();
         _pokeVol();
-        return super.withdraw(assets, receiver, owner_);
+        (uint256 nav, ) = _navWad();
+        _navMemo = nav + 1;
+        uint256 shares = super.withdraw(assets, receiver, owner_);
+        _navMemo = 0;
+        return shares;
     }
 
-    function redeem(uint256 shares, address receiver, address owner_) public override returns (uint256) {
+    function redeem(uint256 shares, address receiver, address owner_) public override nonReentrant returns (uint256) {
         _refreshCapitalRef();
         _pokeVol();
-        return super.redeem(shares, receiver, owner_);
+        (uint256 nav, ) = _navWad();
+        _navMemo = nav + 1;
+        uint256 assets = super.redeem(shares, receiver, owner_);
+        _navMemo = 0;
+        return assets;
     }
 
     /// @notice Penarikan dibatasi likuiditas bebas: cash − escrow − reserved (FR-32). Tetap jalan saat stale (NAV konservatif).
