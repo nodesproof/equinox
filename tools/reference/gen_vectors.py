@@ -44,7 +44,8 @@ for (K, sig, call, Td) in [(4200,.6,True,7),(4000,.6,False,7),(3000,.6,False,7),
     sg, it = implied_vol_wad(tgt, W_(S), W_(K), W_(T), 0, call)
     iv_v.append((tgt, W_(S), W_(K), W_(T), 0, call, sg, it))
 ewma_v = []
-var = W_(0.55**2); prices = [(4000, 0), (4020, .25), (3960, .5), (4100, 1.0), (4080, 1.5), (3900, 2.0)]
+var = W("0.55") * W("0.55") // WAD  # seed persis seperti EquinoxVolEngine: sigmaSeed² / 1e18 dengan sigmaSeed = 0.55e18 eksak
+prices = [(4000, 0), (4020, .25), (3960, .5), (4100, 1.0), (4080, 1.5), (3900, 2.0)]
 for i_ in range(1, len(prices)):
     p0, t0 = prices[i_-1]; p1, t1 = prices[i_]
     dt = int((t1 - t0) * 86400)
