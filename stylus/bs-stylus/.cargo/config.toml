@@ -1,0 +1,4 @@
+# Stylus menagih ~1000 gas per halaman memori WASM (64 KiB) pada setiap panggilan.
+# Stack default Rust 1 MiB = 16 halaman. Matematika kita tidak rekursif dan butuh < 16 KiB.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16384"]
