@@ -3,8 +3,15 @@ pragma solidity ^0.8.24;
 
 import { PoolFixture } from "./PoolFixture.sol";
 import { EquinoxPool } from "../src/pool/EquinoxPool.sol";
+import { EquinoxOptionToken } from "../src/pool/EquinoxOptionToken.sol";
+import { EquinoxVolEngine } from "../src/pool/EquinoxVolEngine.sol";
 import { IBlackScholes } from "../src/interfaces/IBlackScholes.sol";
 import { MockSwitchableMath } from "../src/mocks/MockSwitchableMath.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IERC1155Receiver } from "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
+import { IERC165 } from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 
 /// @notice Skenario wajib PRD §12 (1–13) + properti INV-1..4, INV-9, INV-11, INV-14 pada jalur happy/edge.
 contract EquinoxPoolTest is PoolFixture {
@@ -763,8 +770,177 @@ contract EquinoxPoolTest is PoolFixture {
         // R3-a: neither side may cross the sigma0 mark either.
         uint256 t = uint256(expiry - block.timestamp) * WAD / 31_536_000;
         uint256 sigma0 = vol.sigmaMark(0);
-        (uint256 p0Wad, , ) = mathSol.cappedCall(6000e18, 3000e18, 6000e18, t, sigma0, 0);
+        (uint256 p0Wad, , int256 vega0) = mathSol.cappedCall(6000e18, 3000e18, 6000e18, t, sigma0, 0);
+        // Pin the regime: the unit vega at sigma0 must actually be negative here, so parameter drift (seed, VRP,
+        // lambda, tick sizes) cannot silently move this test out of the negative-vega case it exists to cover.
+        assertLt(vega0, 0, "unit vega at sigma0 must be negative in the tested state");
         assertLe(qc, p0Wad * size / WAD / 1e12, "close must never pay above the mark");
         assertGe(qb.premiumAssets, (p0Wad * size / WAD + 1e12 - 1) / 1e12, "buy must never charge below the mark");
+    }
+
+    /// R2-c/R3-a regression for the round-2 inversion on a tenor the 7-day scenario cannot reach: a 4-week K=3000
+    /// call position sized to ~33% of the vega cap (250 units: 750k reserved < 800k util cap, booked vega ~16.6k of
+    /// the 50k cap = 5% x 1M), then a single 1-day 6000 print whose EWMA spike puts sigma_mark well above 2 and the
+    /// strike at exactly S/2 -- the negative-unit-vega regime with a large release on close. Must be green at HEAD:
+    /// close never above buy, and neither side crosses the sigma0 mark (the buy side is actively clamped up to p0
+    /// in this state: the unclamped buy price sits below the mark because util impact outweighs the -spread).
+    function test_negative_vega_inversion_regression_4w() public {
+        lpDeposit(1_000_000e6);
+        uint64 expiry = uint64(T0 + 4 * WEEK);
+        uint128[] memory ks = new uint128[](2);
+        ks[0] = 3000e18;
+        ks[1] = 4000e18;
+        pool.createBoard(expiry, ks);
+        uint256 id = sid(expiry, 3000e18, true);
+
+        uint256 size = 250e18;
+        traderBuy(id, size);
+        assertGe(pool.netVega(), 15_000e18, "booked vega >= 30% of the vega cap");
+        assertLe(pool.netVega(), 22_500e18, "booked vega <= 45% of the vega cap");
+
+        vm.warp(block.timestamp + 1 days);
+        tick(6000e8);
+        vol.poke(); // quoteBuy/quoteClose are view -- poke explicitly so the EWMA actually reacts to the tick
+
+        uint256 t = uint256(expiry - block.timestamp) * WAD / 31_536_000;
+        uint256 sigma0 = vol.sigmaMark(0);
+        assertGt(sigma0, 2e18, "EWMA spike must put sigma_mark well above 2");
+        (uint256 p0Wad, , int256 vega0) = mathSol.cappedCall(6000e18, 3000e18, 6000e18, t, sigma0, 0);
+        assertLt(vega0, 0, "(a) unit vega at sigma0 must be negative in this state");
+
+        (uint256 qc, , ) = pool.quoteClose(id, size);
+        EquinoxPool.QuoteOut memory qb = pool.quoteBuy(id, size);
+        assertLe(qc, qb.premiumAssets, "(b) quoteClose must never exceed quoteBuy");
+        assertLe(qc, p0Wad * size / WAD / 1e12, "(c) close must never pay above the mark");
+        assertGe(qb.premiumAssets, (p0Wad * size / WAD + 1e12 - 1) / 1e12, "(c) buy must never charge below the mark");
+    }
+
+    // ------------------------------------------------------------ access control & re-entrancy (Task 6)
+
+    /// Every privileged entry point rejects a non-owner / non-pool / non-deployer caller with the specific error,
+    /// before any of its own checks run (e.g. setTreasury(trader) fails on ownership, not on ZeroAddress).
+    function test_access_control_negatives() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4200e18, true);
+        bytes memory notOwner = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, trader);
+
+        uint128[] memory ks = new uint128[](1);
+        ks[0] = 4100e18;
+        vm.expectRevert(notOwner);
+        vm.prank(trader);
+        pool.createBoard(uint64(T0 + 2 * WEEK), ks);
+
+        vm.expectRevert(notOwner);
+        vm.prank(trader);
+        pool.pauseTrading(true);
+
+        EquinoxPool.Config memory c = deployParams(address(mathSol)).cfg;
+        vm.expectRevert(notOwner);
+        vm.prank(trader);
+        pool.setConfig(c);
+
+        vm.expectRevert(notOwner);
+        vm.prank(trader);
+        pool.setTreasury(trader);
+
+        EquinoxVolEngine.Params memory p = deployParams(address(mathSol)).vol;
+        vm.expectRevert(notOwner);
+        vm.prank(trader);
+        vol.setParams(p);
+
+        vm.expectRevert(EquinoxOptionToken.OnlyPool.selector);
+        vm.prank(trader);
+        token.mint(trader, id, 1);
+        vm.expectRevert(EquinoxOptionToken.OnlyPool.selector);
+        vm.prank(trader);
+        token.burn(trader, id, 1);
+
+        // bindPool: the deployer guard fires first (the token's deployer is the factory, not this test contract),
+        // then the already-bound guard for the deployer itself.
+        assertEq(token.deployer(), address(factory));
+        vm.expectRevert(EquinoxOptionToken.OnlyDeployer.selector);
+        token.bindPool(address(pool));
+        vm.expectRevert(EquinoxOptionToken.AlreadyBound.selector);
+        vm.prank(address(factory));
+        token.bindPool(address(pool));
+        assertEq(token.pool(), address(pool), "binding unchanged");
+    }
+
+    /// The ERC-1155 mint inside `buy` hands control to the receiver before `buy` returns. A receiver that re-enters
+    /// close/buy/claim from onERC1155Received must be rejected by the reentrancy guard specifically (not by some
+    /// accident of state such as NotSettled), and the outer buy must still complete normally.
+    function test_reentrancy_buyer_blocked() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4200e18, true);
+        ReentrantBuyer buyer = new ReentrantBuyer(pool);
+        usdg.mint(address(buyer), 100_000e6);
+
+        uint256 size = 1e18;
+        uint256 premium = buyer.attack(id, size);
+        assertGt(premium, 0, "outer buy completes");
+        assertEq(token.balanceOf(address(buyer), id), size, "buyer holds exactly the outer size");
+        assertEq(token.totalSupply(id), size, "no re-entrant mint/burn slipped through");
+
+        bytes4 guard = ReentrancyGuard.ReentrancyGuardReentrantCall.selector;
+        assertEq(guard, bytes4(0x3ee5aeb5));
+        assertEq(buyer.closeErr(), guard, "re-entrant close rejected by the guard");
+        assertEq(buyer.buyErr(), guard, "re-entrant buy rejected by the guard");
+        assertEq(buyer.claimErr(), guard, "re-entrant claim rejected by the guard");
+    }
+}
+
+/// @notice Helper test_reentrancy_buyer_blocked: pembeli yang mencoba masuk kembali ke pool dari hook ERC-1155 saat
+///         `buy` mencetak token. Setiap percobaan dibungkus try/catch sendiri dan selector error-nya dicatat
+///         (bytes4(0) bila panggilan justru sukses), lalu hook mengembalikan selector agar buy luar selesai.
+contract ReentrantBuyer is IERC1155Receiver {
+    EquinoxPool public immutable pool;
+    uint256 public id;
+    uint256 public size;
+    bytes4 public closeErr;
+    bytes4 public buyErr;
+    bytes4 public claimErr;
+
+    constructor(EquinoxPool pool_) {
+        pool = pool_;
+        IERC20(pool_.asset()).approve(address(pool_), type(uint256).max);
+    }
+
+    function attack(uint256 id_, uint256 size_) external returns (uint256) {
+        id = id_;
+        size = size_;
+        return pool.buy(id_, size_, type(uint256).max);
+    }
+
+    function onERC1155Received(address, address, uint256, uint256, bytes calldata) external returns (bytes4) {
+        try pool.close(id, size, 0) {
+            closeErr = bytes4(0);
+        } catch (bytes memory err) {
+            closeErr = bytes4(err);
+        }
+        try pool.buy(id, size, type(uint256).max) {
+            buyErr = bytes4(0);
+        } catch (bytes memory err) {
+            buyErr = bytes4(err);
+        }
+        try pool.claim(id, size) {
+            claimErr = bytes4(0);
+        } catch (bytes memory err) {
+            claimErr = bytes4(err);
+        }
+        return this.onERC1155Received.selector;
+    }
+
+    function onERC1155BatchReceived(address, address, uint256[] calldata, uint256[] calldata, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return this.onERC1155BatchReceived.selector;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IERC1155Receiver).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 }
