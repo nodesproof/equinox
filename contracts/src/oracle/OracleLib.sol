@@ -39,8 +39,9 @@ library OracleLib {
         if (address(sequencerFeed) == address(0)) return true;
         try sequencerFeed.latestRoundData() returns (uint80, int256 answer, uint256 startedAt, uint256, uint80) {
             // Konvensi Chainlink: answer 0 = up, 1 = down; startedAt = saat status terakhir berubah.
+            // startedAt == 0 berarti round uptime belum pernah diinisialisasi — jangan dianggap "up sejak epoch".
             if (answer != 0) return false;
-            if (startedAt > block.timestamp) return false;
+            if (startedAt == 0 || startedAt > block.timestamp) return false;
             return block.timestamp - startedAt >= grace;
         } catch {
             return false;

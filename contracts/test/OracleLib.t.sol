@@ -75,6 +75,15 @@ contract OracleLibTest is Test {
         assertEq(s.priceWad, 0);
     }
 
+    /// M-3 (final review): an uninitialised L2-uptime round (startedAt == 0) must not count as "up since epoch".
+    function test_sequencer_startedAt_zero_is_not_up() public {
+        seqf.set(0, 0); // answer 0 = "up", but the round was never initialised
+        OracleLib.Spot memory s = h.read(address(feed), address(seqf), 1e10, 3600, 3, 3600);
+        assertFalse(s.fresh);
+        assertEq(s.priceWad, 0);
+        assertFalse(h.read(address(feed), address(seqf), 1e10, 3600, 3, 0).fresh); // even with grace 0
+    }
+
     function test_future_updatedAt_is_not_fresh() public {
         feed.set(4000e8, T0 + 100);
         assertFalse(h.read(address(feed), address(seqf), 1e10, 3600, 3, 3600).fresh);
