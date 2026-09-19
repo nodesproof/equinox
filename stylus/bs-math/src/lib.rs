@@ -16,9 +16,11 @@ pub mod normal;
 pub mod bs;
 pub mod solver;
 pub mod ewma;
+pub mod portfolio;
 
 pub use alloy_primitives::{I256, U256};
 pub use error::MathError;
 pub use bs::{quote, price, capped_call, Quote, CappedQuote};
 pub use solver::implied_vol;
 pub use ewma::ewma_update;
+pub use portfolio::mark_portfolio;
