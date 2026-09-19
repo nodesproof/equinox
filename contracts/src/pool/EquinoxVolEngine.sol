@@ -58,10 +58,11 @@ contract EquinoxVolEngine is Ownable2Step {
         emit ParamsUpdated(p);
     }
 
-    /// @notice Permissionless. Mengabaikan round lama dan Δt < MIN_OBS_INTERVAL (FR-12).
+    /// @notice Permissionless. Mengabaikan round lama, round bertanggal masa depan (`updatedAt > block.timestamp`,
+    ///         simetris dengan `OracleLib.read`), dan Δt < MIN_OBS_INTERVAL (FR-12).
     function poke() external returns (uint256) {
         (uint80 roundId, int256 answer, , uint256 updatedAt, ) = feed.latestRoundData();
-        if (roundId <= lastRoundId || answer <= 0 || updatedAt <= lastTs) return sigmaBase();
+        if (roundId <= lastRoundId || answer <= 0 || updatedAt <= lastTs || updatedAt > block.timestamp) return sigmaBase();
         uint256 dt = updatedAt - lastTs;
         if (dt < MIN_OBS_INTERVAL) return sigmaBase();
         uint256 p = uint256(answer) * priceScale;
@@ -80,11 +81,14 @@ contract EquinoxVolEngine is Ownable2Step {
         return _clamp(math.sqrt(varWad));
     }
 
-    /// @notice σ_mark = clamp(σ_base × VRP × (1 + α·util)), util WAD ∈ [0, 1] (FR-13).
+    /// @notice σ_mark = clamp(σ_base × VRP × (1 + α·util)), util WAD ∈ [0, 1] (FR-13), dengan σ_base = clamp(√var)
+    ///         (`sigmaBase()`, §6.4/FR-15): σ_base di-clamp DULU, baru produknya — sehingga saat √var < σ_min pool
+    ///         mark pada σ_min × VRP, bukan σ_min telanjang, dan `sigmaBase() × vrp == sigmaMark(0)` selama produknya
+    ///         di dalam batas (M-1 review akhir).
     function sigmaMark(uint256 utilWad) external view returns (uint256) {
         if (utilWad > WAD) utilWad = WAD;
         Params memory p = params;
-        uint256 s = math.sqrt(varWad);
+        uint256 s = sigmaBase();
         s = s * p.vrp / WAD;
         s = s * (WAD + uint256(p.alpha) * utilWad / WAD) / WAD;
         return _clamp(s);
@@ -120,9 +124,10 @@ contract EquinoxVolEngine is Ownable2Step {
         if (p.sigmaMax > 5e18 || p.sigmaMax <= p.sigmaMin) revert ParamOutOfBounds(5);
         // R3-b: EquinoxPool's vega-sign-aware spread can price a close/buy at sigmaMark(u)*(1+spread) even when
         // the unit vega is negative (capped call near S/2 at high sigma) -- keep sigmaMax*(1+spread) inside the
-        // math domain's SIGMA_MAX (5e18) so close() (which must never revert) can't hit OutOfDomain. The lower
-        // side is implied: sigmaMin >= 0.05e18 and spread <= 0.2e18 give sigma*(1-spread) >= 0.04e18, comfortably
-        // above the domain's SIGMA_MIN (0.01e18).
+        // math domain's SIGMA_MAX (5e18) so close() (which must never revert on in-domain inputs; it can still
+        // revert on a stale oracle or when math is down) can't hit OutOfDomain. The lower side is implied:
+        // sigmaMin >= 0.05e18 and spread <= 0.2e18 give sigma*(1-spread) >= 0.04e18, comfortably above the
+        // domain's SIGMA_MIN (0.01e18).
         if (p.sigmaMax * (WAD + p.spread) / WAD > 5e18) revert ParamOutOfBounds(5);
     }
 

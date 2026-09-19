@@ -71,6 +71,34 @@ contract EquinoxVolEngineTest is Test {
         assertEq(vol.sigmaMark(5e18), vol.sigmaMark(1e18));
     }
 
+    /// M-1 (final review, PRD §6.4 / FR-15): σ_mark clamps σ_base FIRST, then applies VRP × (1 + α·util) and clamps
+    /// the product -- so a seed below σ_min marks at σ_min × VRP (0.20 × 1.15 = 0.23), not at a bare σ_min.
+    function test_sigmaMark_clamps_sigmaBase_before_vrp() public {
+        BlackScholesSol math2 = new BlackScholesSol();
+        EquinoxVolEngine low = new EquinoxVolEngine(address(this), address(feed), address(math2),
+            EquinoxVolEngine.Params(0.94e18, 1.15e18, 0.3e18, 0.05e18, 0.2e18, 3e18), 0.10e18);
+        assertEq(low.sigmaBase(), 0.20e18, "sigma_base clamped to sigma_min");
+        assertEq(low.sigmaMark(0), 0.20e18 * 1.15e18 / 1e18, "sigma_mark(0) = sigma_min x VRP = 0.23");
+        assertEq(low.sigmaMark(0), low.sigmaBase() * 1.15e18 / 1e18, "sigmaBase() x vrp == sigmaMark(0) when in bounds");
+        // the un-clamped engine (seed 0.55) is unaffected: sigmaMark(0) == sigmaBase() x VRP as before
+        assertEq(vol.sigmaMark(0), vol.sigmaBase() * 1.15e18 / 1e18);
+    }
+
+    /// M-4 (final review): a future-dated round (updatedAt > block.timestamp) is ignored by poke, symmetric with
+    /// OracleLib.read -- no observation, varWad/lastTs/lastRoundId unchanged.
+    function test_poke_skips_future_round() public {
+        uint256 v0 = vol.varWad();
+        feed.set(4100e8, T0 + 1000); // round baru, tetapi updatedAt di masa depan
+        vol.poke();
+        assertEq(vol.varWad(), v0, "varWad unchanged");
+        assertEq(vol.lastTs(), T0, "lastTs unchanged");
+        assertEq(vol.lastRoundId(), 1, "round not consumed");
+        vm.warp(T0 + 1000); // once the chain reaches updatedAt the same round is a normal observation
+        vol.poke();
+        assertGt(vol.varWad(), v0);
+        assertEq(vol.lastRoundId(), 2);
+    }
+
     function test_sigmaBase_clamped_to_bounds() public {
         // harga meledak → realized vol > σ_max → clamp 300%
         vm.warp(T0 + 3600);
