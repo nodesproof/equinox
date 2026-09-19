@@ -107,7 +107,7 @@ FOUR = 4 * WAD
 def erfc_wad(x):                      # erfc untuk x apa pun (WAD)
     y = abs(x)
     if y <= THRESH:
-        ysq = mul_wad(y, y) if y > W("1.11e-16") else 0
+        ysq = mul_wad(y, y) if y > 111000 else 0     # 111000 wei = Rust/Solidity; mul_wad(y,y) = 0 untuk y < 1e9 wei
         xnum = mul_wad(A[4], ysq); xden = ysq
         for i in range(3):
             xnum = mul_wad(xnum + A[i], ysq); xden = mul_wad(xden + B[i], ysq)
@@ -184,12 +184,31 @@ def implied_vol_wad(target, s, k, t, r, is_call, lo=WAD // 100, hi=5 * WAD, max_
 SECONDS_PER_DAY = 86400
 SECONDS_PER_YEAR = 31_536_000
 def ewma_update_wad(var_prev, p_prev, p_now, dt_seconds, lam_per_day):
+    if dt_seconds > (2**255 - 1) // WAD: raise OverflowError("Overflow")   # paritas checked_mul Rust / guard Solidity
     dt_days = dt_seconds * WAD // SECONDS_PER_DAY               # WAD hari
     w = exp_wad(mul_wad(dt_days, ln_wad(lam_per_day)))          # λ^(Δt hari)
     r = ln_wad(div_wad(p_now, p_prev))
     dt_years = dt_seconds * WAD // SECONDS_PER_YEAR
     inst = div_wad(mul_wad(r, r), dt_years)
     return mul_wad(w, var_prev) + mul_wad(WAD - w, inst)
+
+# ---- Batch mark-to-market (FR-8) — cermin stylus/bs-math/src/portfolio.rs ----
+def mark_portfolio_wad(s, r, sigma, cap_mult, ks, ts, is_calls, ois):
+    """(Σ oi·mid, Σ oi·vega); call → capped_call_wad dengan cap = mul_wad(k, cap_mult), put → bs_quote_wad."""
+    n = len(ks)
+    if len(ts) != n or len(is_calls) != n or len(ois) != n: raise ValueError("LengthMismatch")
+    if n > 32: raise ValueError("OutOfDomain(4)")
+    sum_mid = sum_vega = 0
+    for k, t, is_call, oi in zip(ks, ts, is_calls, ois):
+        if oi == 0: continue
+        if is_call:
+            cap = mul_wad(k, cap_mult)
+            mid, _, vega = capped_call_wad(s, k, cap, t, sigma, r)
+        else:
+            mid, _, _, vega, _ = bs_quote_wad(s, k, t, sigma, r, False)
+        sum_mid += mul_wad(oi, mid)
+        sum_vega += mul_wad(oi, vega)
+    return sum_mid, sum_vega
 
 # ======================= VERIFIKASI =======================
 def selftest():
@@ -244,6 +263,13 @@ def selftest():
         p0, t0 = prices[i-1]; p1, t1 = prices[i]
         var = ewma_update_wad(var, p0 * WAD, p1 * WAD, int((t1 - t0) * 86400), int(0.94 * WAD))
     print(f"  ewma σ akhir = {math.sqrt(var / WAD):.4%} (float 58.60%)")
+    # portfolio (kasus t_portfolio.rs): Σ harus sama dengan jumlah manual capped_call_wad + bs_quote_wad
+    s_, sg_, t7_, t30_ = 4000 * WAD, 6 * WAD // 10, 7 * WAD // 365, 30 * WAD // 365
+    ks_, ts_, cs_, ois_ = [4200 * WAD, 3800 * WAD, 4000 * WAD], [t7_, t7_, t30_], [True, False, True], [10 * WAD, 5 * WAD, 0]
+    pm, pv = mark_portfolio_wad(s_, 0, sg_, 2 * WAD, ks_, ts_, cs_, ois_)
+    a_ = capped_call_wad(s_, ks_[0], 2 * ks_[0], t7_, sg_, 0); b_ = bs_quote_wad(s_, ks_[1], t7_, sg_, 0, False)
+    assert (pm, pv) == (mul_wad(ois_[0], a_[0]) + mul_wad(ois_[1], b_[0]), mul_wad(ois_[0], a_[2]) + mul_wad(ois_[1], b_[3])), "mark_portfolio_wad ≠ jumlah manual"
+    print(f"  portfolio Σmid = {pm / WAD:.6f} Σvega = {pv / WAD:.6f}")
     print("\nWORST ERRORS:")
     for k_, v_ in worst.items(): print(f"  {k_:10s} {v_:.3e}")
     limits = {"exp": 1e-9, "ln": 1e-14, "sqrt": 1e-13, "Phi_abs": 1e-15, "pdf_abs": 1e-15,
