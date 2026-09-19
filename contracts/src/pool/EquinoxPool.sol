@@ -161,6 +161,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         sequencerFeed = IAggregatorV3(d.sequencerFeed);
         priceScale = 10 ** (18 - IAggregatorV3(d.feed).decimals());
         assetScale = 10 ** (18 - IERC20Metadata(d.usdg).decimals());
+        // |r| <= 50 %: batas kewajaran di dalam domain math (|r| <= 1e18); deployment ini memakai r = 0 (M-5).
+        if (d.rWad < -0.5e18 || d.rWad > 0.5e18) revert ConfigOutOfBounds(11);
         rWad = d.rWad;
         _setConfig(d.cfg);
         if (d.treasury == address(0)) revert ZeroAddress();
@@ -321,6 +323,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     ///      dengan clamp `min` di `quoteClose`, ini menjamin `quoteBuy ≥ p0 ≥ quoteClose` untuk tanda vega & rilis
     ///      berapa pun, sehingga NAV (yang di-mark pada σ₀, lihat `_liabilityWad`) tidak pernah turun akibat trade —
     ///      inilah yang menutup sandwich deposit/redeem residual yang C-1+R2-a sendiri belum tutup (lihat R3-a).
+    ///      `q.sigma` adalah σ EFEKTIF yang menentukan harga: σ_buy bila p_buy > p0, σ₀ bila clamp yang mengikat
+    ///      (M-2 review akhir) — nilai inilah yang dibawa event `Bought`.
     function quoteBuy(uint256 seriesId, uint256 size) public view returns (QuoteOut memory q) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
@@ -339,7 +343,7 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         if (premiumWad < floorWad) premiumWad = floorWad;
         q.premiumAssets = _ceilAssets(premiumWad);
         q.feeAssets = _ceilAssets(premiumWad * cfg.feeBps / 10_000);
-        q.sigma = sigmaBuy;
+        q.sigma = pBuy > p0 ? sigmaBuy : sigma0;
         q.delta = delta;
         q.vegaTotal = vegaBuy * size / WAD;
         q.spotWad = s;
@@ -349,7 +353,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     /// @dev Arah spread mengikuti tanda vega unit pada σ₀ = σ_mark(0) (R3-a; dihitung ulang di sini sama seperti
     ///      `quoteBuy`): `−spread` bila vega ≥ 0, `+spread` bila negatif. Harga per unit di-clamp `min(p_close, p0)`
     ///      — pool tidak pernah membeli balik di atas mark σ₀ (R3-a), menjamin `quoteBuy ≥ p0 ≥ quoteClose` untuk
-    ///      tanda vega & rilis berapa pun (lihat NatSpec `quoteBuy`).
+    ///      tanda vega & rilis berapa pun (lihat NatSpec `quoteBuy`). `sigmaClose` yang dikembalikan adalah σ EFEKTIF:
+    ///      σ_close bila p_close < p0, σ₀ bila clamp yang mengikat (M-2 review akhir) — dibawa event `Closed`.
     function quoteClose(uint256 seriesId, uint256 size) public view returns (uint256 proceedsAssets, uint256 sigmaClose, uint256 spotWad) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
@@ -361,7 +366,8 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
         uint256 spread = vol.spread();
         sigmaClose = vol.sigmaMark(_util(netVega - rel)) * (posVega ? (WAD - spread) : (WAD + spread)) / WAD;
         (uint256 pClose, , ) = _price(s, sr.strike, t, sigmaClose, sr.isCall);
-        uint256 p = pClose < p0 ? pClose : p0; // R3-a: never buy back above the mark
+        uint256 p = pClose;
+        if (pClose >= p0) (p, sigmaClose) = (p0, sigma0); // R3-a: never buy back above the mark; M-2: report sigma0
         proceedsAssets = (p * size / WAD) / assetScale;
         spotWad = s;
     }

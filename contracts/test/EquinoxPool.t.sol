@@ -495,6 +495,17 @@ contract EquinoxPoolTest is PoolFixture {
         d.treasury = address(0);
         vm.expectRevert(EquinoxPool.ZeroAddress.selector);
         factory.createPool(d);
+
+        // M-5 (final review): |rWad| <= 0.5e18 (sanity bound inside the math domain |r| <= 1e18; r = 0 here).
+        d = deployParams(address(mathSol));
+        d.rWad = 0.6e18;
+        vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 11));
+        factory.createPool(d);
+        d.rWad = -0.6e18;
+        vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 11));
+        factory.createPool(d);
+        d.rWad = 0.5e18; // boundary accepted
+        assertEq(EquinoxPool(factory.createPool(d)).rWad(), 0.5e18);
     }
 
     /// ITM put settlement + claim on a non-ATM strike (regression coverage alongside the ITM call scenarios).
@@ -738,11 +749,15 @@ contract EquinoxPoolTest is PoolFixture {
         uint256 p0ProceedsFloor = p0Wad * size / WAD / 1e12;
         uint256 p0PremiumCeil = (p0Wad * size / WAD + 1e12 - 1) / 1e12;
 
-        (uint256 qc, , ) = pool.quoteClose(id, size);
+        (uint256 qc, uint256 sigmaCloseReturned, ) = pool.quoteClose(id, size);
         assertLe(qc, p0ProceedsFloor, "close must never pay above the mark");
+        // M-2 (final review): when the clamp binds, the quote reports the EFFECTIVE sigma (sigma0), which is what
+        // the Closed event then carries -- not the unclamped sigma that did not price the trade.
+        assertEq(sigmaCloseReturned, sigma0, "clamped close reports sigma0 as the effective sigma");
 
         EquinoxPool.QuoteOut memory qb = pool.quoteBuy(id, size);
         assertGe(qb.premiumAssets, p0PremiumCeil, "buy must never charge below the mark");
+        assertGt(qb.sigma, sigma0, "buy side is not clamped in this state: reports sigma_buy");
 
         // Confirm the clamp is actually engaged here: the unclamped close sigma sits above sigma0.
         (, , , , , uint256 oi, uint256 vegaAcc, ) = pool.series(id);
