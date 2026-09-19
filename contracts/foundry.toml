@@ -14,7 +14,7 @@ remappings = [
 
 [invariant]
 runs = 32
-depth = 64
+depth = 128
 fail_on_revert = false
 
 [fuzz]

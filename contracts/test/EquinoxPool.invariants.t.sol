@@ -6,6 +6,7 @@ import { EquinoxPool } from "../src/pool/EquinoxPool.sol";
 import { MockFeed } from "../src/mocks/MockFeed.sol";
 import { MockUSDG } from "../src/mocks/MockUSDG.sol";
 import { Test } from "forge-std/Test.sol";
+import { console2 } from "forge-std/console2.sol";
 
 /// @notice Handler: aksi acak LP/trader/keeper + pergerakan harga & waktu. Revert yang sah (cap, stale, slippage) diabaikan.
 contract PoolHandler is Test {
@@ -122,6 +123,12 @@ contract EquinoxPoolInvariants is PoolFixture {
 
     function _cashWad() internal view returns (uint256) {
         return usdg.balanceOf(address(pool)) * 1e12;
+    }
+
+    /// @dev Ghost `trades` (buy+close sukses) dicatat, tidak di-assert (jumlahnya bergantung pada urutan acak — assert
+    ///      akan flaky); nilai > 0 di log menunjukkan INV-15/INV-16 tidak lolos secara vakum.
+    function afterInvariant() public view {
+        console2.log("ghost trades (successful buy+close) in the last run:", handler.trades());
     }
 
     /// INV-1: reserved <= cash - escrow.

@@ -775,14 +775,8 @@ contract EquinoxPoolTest is PoolFixture {
     /// strike drifts to exactly S/2 -- the negative-unit-vega regime -- and the EWMA reacts, sigma_base ~1.42) and
     /// most of the position is closed. quoteClose must never exceed quoteBuy for the same size, and (after R3-a)
     /// neither may cross the sigma0 mark.
-    ///
-    /// Reproduction note: despite a sustained, varied effort against this exact HEAD (unit vega at K=3000/S=4000
-    /// measured directly at ~1.42 WAD/unit, not the "a few hundred WAD" estimated in the ruling; tried the full
-    /// 264e18 release, a 1e18 sliver, and this 200e18 majority-release, all after the same two-tick rally to
-    /// sigma_base ~1.42), quoteClose stayed strictly below quoteBuy at HEAD (f7661f7) in every variant tried --
-    /// the inversion the re-reviewer measured (186,872 > 186,156) was not reproduced here, most likely because it
-    /// depends on exact parameters (config/feed timing/vol seed) not fully specified in the ruling. Kept as a green
-    /// property test per the ruling's explicit fallback, not silently skipped.
+    /// The round-2 inversion is not reachable on this 7-day tenor (booked vega is too small a share of the cap);
+    /// the regression that reproduces that regime is test_negative_vega_inversion_regression_4w below.
     function test_negative_vega_large_release_no_inversion() public {
         lpDeposit(1_000_000e6);
         uint64 expiry = uint64(T0 + WEEK);
@@ -985,10 +979,51 @@ contract EquinoxPoolTest is PoolFixture {
         assertEq(usdg.balanceOf(address(pool)) - cashBefore, paid, "pool receives it");
     }
 
+    /// I-4 (final review): after settle, three holders claim in parts (including a 1-wei claim). Every claim
+    /// succeeds, the series supply ends at zero, no holder is paid above the escrow, and the escrow dust left by
+    /// per-claim floor rounding is bounded by the number of claims (each claim can leave < 1 asset unit behind).
+    function test_multi_holder_partial_claims() public {
+        lpDeposit(1_000_000e6);
+        (uint256 boardId, uint64 expiry, ) = listBoard7d();
+        uint256 id = sid(expiry, 4200e18, true);
+        traderBuy(id, 10e18);
+        address h2 = makeAddr("holder2");
+        address h3 = makeAddr("holder3");
+        vm.startPrank(trader);
+        token.safeTransferFrom(trader, h2, id, 3e18, "");
+        token.safeTransferFrom(trader, h3, id, 3e18, "");
+        vm.stopPrank();
+        vm.warp(expiry);
+        tick(430012345678); // S_T = 4300.12345678 -> payout/unit = 100.12345678 USDG (non-round, exercises rounding)
+        pool.settle(boardId);
+        (, , , , , , , uint256 ppu) = pool.series(id);
+        assertEq(ppu, 100.12345678e18);
+        uint256 escrow0 = pool.escrowedPayouts();
+        assertEq(escrow0, 10e18 * ppu / WAD);
+
+        uint256 paidTotal;
+        address[6] memory who = [trader, trader, h2, h2, h3, h3];
+        uint256[6] memory amt = [uint256(1), 4e18 - 1, 1e18 + 1, 2e18 - 1, 1.5e18, 1.5e18];
+        for (uint256 i = 0; i < 6; i++) {
+            uint256 balBefore = usdg.balanceOf(who[i]);
+            vm.prank(who[i]);
+            uint256 paid = pool.claim(id, amt[i]);
+            assertEq(usdg.balanceOf(who[i]) - balBefore, paid, "claim pays exactly what it returns");
+            assertEq(paid, amt[i] * ppu / WAD / 1e12, "payout floored to asset units");
+            paidTotal += paid;
+        }
+        assertEq(token.totalSupply(id), 0, "all claimed");
+        assertEq(token.balanceOf(trader, id) + token.balanceOf(h2, id) + token.balanceOf(h3, id), 0);
+        assertLe(paidTotal * 1e12, escrow0, "never pays above the escrow");
+        assertLe(pool.escrowedPayouts(), 6 * 1e12, "escrow dust <= number of claims (in asset units x assetScale)");
+        assertGe(paidTotal + 6, escrow0 / 1e12, "holders lose at most 1 asset unit per claim to rounding");
+    }
+
     // ------------------------------------------------------------ access control & re-entrancy (Task 6)
 
-    /// Every privileged entry point rejects a non-owner / non-pool / non-deployer caller with the specific error,
-    /// before any of its own checks run (e.g. setTreasury(trader) fails on ownership, not on ZeroAddress).
+    /// Every privileged entry point rejects a non-owner / non-pool / non-deployer caller with the specific
+    /// access-control error. The arguments passed are otherwise valid (e.g. setTreasury(trader) is a non-zero
+    /// address), so the access-control check is the only thing that can revert.
     function test_access_control_negatives() public {
         lpDeposit(1_000_000e6);
         (, uint64 expiry, ) = listBoard7d();

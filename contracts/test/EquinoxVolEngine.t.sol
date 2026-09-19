@@ -6,6 +6,7 @@ import { EquinoxVolEngine } from "../src/pool/EquinoxVolEngine.sol";
 import { BlackScholesSol } from "../src/math/BlackScholesSol.sol";
 import { MockFeed } from "../src/mocks/MockFeed.sol";
 import { VectorsGen } from "./VectorsGen.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @notice Skenario 10 (§6.4 direproduksi bit-eksak lewat vektor EWMA), FR-12, FR-13, FR-15. Berdiri sendiri (tanpa pool).
 contract EquinoxVolEngineTest is Test {
@@ -126,7 +127,7 @@ contract EquinoxVolEngineTest is Test {
         vm.expectRevert(abi.encodeWithSelector(EquinoxVolEngine.ParamOutOfBounds.selector, uint8(5)));
         vol.setParams(p);
         vm.prank(trader);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, trader));
         vol.setParams(p);
     }
 
