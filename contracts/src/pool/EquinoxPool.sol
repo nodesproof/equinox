@@ -474,12 +474,15 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
 
     // ================================================================ internal
 
+    /// @dev Batas keras semua tuas admin. `heartbeat` dibatasi ke [1 jam, 1 hari]: heartbeat 1 detik akan membuat
+    ///      spot stale permanen, yang memblokir `close`/`settle`/`claim` — jeda admin lewat jalan lain, padahal
+    ///      FR-33 menjamin ketiganya tidak pernah bisa dijeda (I-2 review akhir).
     function _setConfig(Config memory c) internal {
         if (c.feeBps > 1000) revert ConfigOutOfBounds(0);
         if (c.maxUtilBps == 0 || c.maxUtilBps > 9000) revert ConfigOutOfBounds(1);
         if (c.vegaCapBps == 0 || c.vegaCapBps > 5000) revert ConfigOutOfBounds(2);
         if (c.minPremiumBps > 100) revert ConfigOutOfBounds(3);
-        if (c.heartbeat == 0 || c.heartbeat > 1 days) revert ConfigOutOfBounds(4);
+        if (c.heartbeat < 1 hours || c.heartbeat > 1 days) revert ConfigOutOfBounds(4);
         if (c.staleMult == 0) revert ConfigOutOfBounds(5);
         if (c.maxOpenSeries == 0 || c.maxOpenSeries > 32) revert ConfigOutOfBounds(6);
         if (c.tenorMax == 0 || c.tenorMax > 90 days) revert ConfigOutOfBounds(7);

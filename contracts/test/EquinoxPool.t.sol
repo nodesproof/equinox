@@ -461,9 +461,16 @@ contract EquinoxPoolTest is PoolFixture {
     }
 
     /// I-3: admin levers are bounded (heartbeat, sequencerGrace, settleBounty) and treasury can never be zero.
+    /// I-2 (final review): the heartbeat also has a 1-hour floor -- a 1-second heartbeat would make the spot
+    /// permanently stale and block close/settle/claim, an admin pause by other means (FR-33).
     function test_config_bounds_and_treasury() public {
         EquinoxPool.Config memory c = deployParams(address(mathSol)).cfg;
         c.heartbeat = 2 days;
+        vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 4));
+        pool.setConfig(c);
+
+        c = deployParams(address(mathSol)).cfg;
+        c.heartbeat = 59 minutes;
         vm.expectRevert(abi.encodeWithSelector(EquinoxPool.ConfigOutOfBounds.selector, 4));
         pool.setConfig(c);
 
