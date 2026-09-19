@@ -12,6 +12,7 @@
 | K1 | Peran Equinox di buildathon | Submisi kedua, paket lengkap (form HackQuest, video script, Q&A juri, scorecard, runbook) |
 | K2 | Kedalaman UI | Dashboard **+ trading lewat wallet** (MetaMask/injected): faucet, deposit/redeem, buy/close/claim dari browser |
 | K3 | Sumber harga di Sepolia | **Chainlink ETH/USD asli** — σ_base benar-benar dari print nyata; waktu tidak bisa di-warp, settlement nyata terjadi di grid Jumat |
+| K4 | σ identik A vs B pada feed hidup | **Satu vol engine bersama** (`EquinoxFactory.createPoolWithVol`): dua engine terpisah tidak bisa tetap identik karena `poke()` hanya mengamati round terakhir dan setiap trade hanya mem-poke engine pool-nya sendiri → histori observasi (dan EWMA) A/B menyimpang. Di Sepolia engine dibuat untuk Pool B (math Stylus) dan dipakai Pool A juga. Konsekuensi jujur: gas `buy` A vs B di Sepolia hanya membandingkan jalur pricing (2 × `cappedCall`); `sqrt` σ sama-sama Stylus. Benchmark devnode (dua engine, feed mock statis) tetap apples-to-apples |
 
 Turunan K3: narasi deterministik §13 (warp 7 hari, settle 4.500, claim) tetap direkam dari Foundry (Pool A/kontrol) karena Foundry tidak bisa mengeksekusi Stylus dan chain publik tidak bisa di-warp; identitas A = B sudah dibuktikan on-chain (Plan 2 §13, Sepolia 20 Sep).
 
@@ -50,20 +51,24 @@ Sepolia (421614)
 
 ## 3. Plan 3a — chain
 
-### 3.1 Deployer dengan feed parametris
-`contracts/src/mocks/PoolE2EDeployer.sol` → constructor `(address owner, address mathA, address mathB, address feed_)`: bila `feed_ == address(0)` deploy `MockFeed(8)` dan `set(4000e8, now)` (perilaku devnode sekarang); bila bukan, pakai alamat itu apa adanya dan **tidak** memanggil `set`. `tick(int256)` hanya valid untuk mock (revert `NotMockFeed()` bila feed eksternal). `nextExpiry`, `_params`, mint 4.000.000 USDG ke owner tetap. `tools/e2e/pool-e2e.sh` meneruskan `address(0)`; test Foundry baru memastikan kedua jalur constructor (mock vs alamat eksternal) menghasilkan pool yang identik konfigurasinya. Ukuran initcode tetap < 49.152 B (`forge build --sizes`).
+### 3.0 Factory: `createPoolWithVol` (K4)
+`EquinoxFactory.createPoolWithVol(EquinoxPool.Deploy calldata d, address vol)` — sama seperti `createPool` tetapi memakai `EquinoxVolEngine` yang sudah ada (`d.vol`/`d.sigmaSeed` diabaikan); revert `VolFeedMismatch()` bila `EquinoxVolEngine(vol).feed() != d.feed`. Kontrak pool, token, engine, dan `PoolDeployer` tidak disentuh. Test `contracts/test/EquinoxFactory.t.sol`: `poolA.vol() == poolB.vol()`, trade di A mem-poke engine yang sama sehingga kuotasi A = B setelah round feed baru, mismatch feed revert, `forge build --sizes` hijau.
+
+### 3.1 Deployer dengan feed parametris & engine bersama
+`contracts/src/mocks/PoolE2EDeployer.sol` → constructor `(address owner, address mathA, address mathB, address feed_, bool sharedVol)`: bila `feed_ == address(0)` deploy `MockFeed(8)` dan `set(4000e8, now)` (perilaku devnode sekarang); bila bukan, pakai alamat itu apa adanya dan **tidak** memanggil `set`. `tick(int256)` hanya valid untuk mock (revert `NotMockFeed()` bila feed eksternal). Pool B dibuat dulu (`createPool`, engine dengan `mathB`); Pool A lewat `createPoolWithVol(paramsA, poolB.vol())` bila `sharedVol`, selain itu `createPool` (dua engine, seperti devnode sekarang). `nextExpiry`, `_params`, mint 4.000.000 USDG ke owner tetap. `tools/e2e/pool-e2e.sh` meneruskan `address(0) false`; test Foundry baru memastikan jalur mock/eksternal dan shared/terpisah. Ukuran initcode tetap < 49.152 B (`forge build --sizes`).
 
 ### 3.2 Deployment ke Sepolia — `tools/sepolia/deploy-pools.sh`
-`forge create PoolE2EDeployer --constructor-args <owner> <mathA> <mathB> 0xd30e2101…` (kunci dari `.env`: `set -a; source .env; set +a`, tidak pernah di-echo). Skrip menulis/menggabungkan ke `deployments/arbitrum-sepolia.json` (dengan `jq`) blok baru:
+`forge create PoolE2EDeployer --constructor-args <owner> <mathA> <mathB> 0xd30e2101… true` (kunci dari `.env`: `set -a; source .env; set +a`, tidak pernah di-echo). Skrip menulis/menggabungkan ke `deployments/arbitrum-sepolia.json` (dengan `jq`) blok baru:
 ```json
 "pools": {
   "deployer": "0x…", "usdg": "0x…", "feed": "0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165", "sequencerFeed": "0x…",
-  "A": { "label": "control (BlackScholesSol)", "pool": "0x…", "token": "0x…", "vol": "0x…", "math": "0x5B23…" },
-  "B": { "label": "Equinox (Stylus)",           "pool": "0x…", "token": "0x…", "vol": "0x…", "math": "0xb3b3…" },
+  "vol": "0x…",                       // engine bersama (math Stylus), K4
+  "A": { "label": "control (BlackScholesSol)", "pool": "0x…", "token": "0x…", "math": "0x5B23…" },
+  "B": { "label": "Equinox (Stylus)",           "pool": "0x…", "token": "0x…", "math": "0xb3b3…" },
   "deployedAtBlock": <blok>, "deployedAt": "<ISO-8601 UTC>"
 }
 ```
-`deployments/arbitrum-sepolia.json` **di-commit** (satu-satunya sumber alamat untuk web, keeper, demo, docs). Verifikasi otomatis di akhir skrip: `quoteBuy` belum bisa (belum ada board) → cek `pool.vol().sigmaBase()` A == B, `feed()` == alamat Chainlink, `asset()` == usdg.
+`deployments/arbitrum-sepolia.json` **di-commit** (satu-satunya sumber alamat untuk web, keeper, demo, docs). Verifikasi otomatis di akhir skrip: `poolA.vol() == poolB.vol()`, `vol.feed()` == alamat Chainlink, `asset()` == usdg untuk keduanya, `vol.sigmaBase()` > 0.
 
 ### 3.3 Board & seed LP — `tools/sepolia/list-boards.sh`
 Dari wallet owner: `usdg.approve` kedua pool; `deposit(1_000_000e6)` ke masing-masing (bootstrap kapital referensi seketika); `createBoard(1790323200, [2400e18, 2600e18, 2800e18])` dan `createBoard(1790928000, [2200e18, 2600e18, 3000e18])` di **kedua** pool (input identik) → 12 seri per pool; skrip membaca `board(id)` dan menulis `boards: [{ "id", "expiry", "strikes", "seriesIds": {"A": [...], "B": [...]} }]` ke JSON. Strike wajib berada dalam `[S/2, 2S]` pada saat listing: skrip membaca spot dulu dan **gagal keras** (bukan menyesuaikan diam-diam) bila spot bergerak keluar rentang — operator memilih strike baru secara sadar. Idempoten: bila board dengan expiry itu sudah ada di JSON, dilewati.
@@ -71,7 +76,7 @@ Dari wallet owner: `usdg.approve` kedua pool; `deposit(1_000_000e6)` ke masing-m
 ### 3.4 Keeper — `tools/keeper/keeper.sh` + `.github/workflows/keeper.yml`
 - Cron `*/15 * * * *` (GitHub Actions; jitter beberapa menit dapat diterima), `workflow_dispatch` untuk manual.
 - Wallet **keeper terpisah** (bukan owner): dibuat `cast wallet new`, didanai ≈ 0,02 Sepolia ETH; kunci disimpan sebagai secret repo `KEEPER_PRIVATE_KEY`; RPC dari secret opsional `SEPOLIA_RPC_URL` (default RPC publik). Bounty settle (2 USDG mock) menumpuk di wallet keeper — tidak penting.
-- Logika per pool (A lalu B): `vol.poke()` (selalu; no-op murah bila round belum berubah); untuk setiap board di JSON dengan `expiry ≤ now` dan `settled == false` (baca `board(id)`): `settle(id)`, revert `SettlementNotReady`/`BoardAlreadySettled` ditoleransi (log, exit 0). Setelah `settle` sukses, tulis hash ke log job (JSON tidak diubah oleh keeper — tanpa commit dari CI).
+- Logika: `vol.poke()` sekali (engine bersama; no-op murah bila round belum berubah); lalu per pool (A lalu B), untuk setiap board di JSON dengan `expiry ≤ now` dan `settled == false` (baca `board(id)`): `settle(id)`, revert `SettlementNotReady`/`BoardAlreadySettled` ditoleransi (log, exit 0). Setelah `settle` sukses, tulis hash ke log job (JSON tidak diubah oleh keeper — tanpa commit dari CI).
 - Pemeriksaan kesehatan yang dicetak tiap run: umur round feed, `programTimeLeft` program Stylus (ArbWasm `0x…71`), `totalAssets()` A vs B, `sigmaMarkNow()` A vs B (harus identik — bila beda, job **gagal** agar terlihat).
 - Mode `DRY_RUN=1` (hanya `cast call`/`estimateGas`) untuk test lokal.
 
@@ -117,11 +122,11 @@ web/
 ### 4.2 Pembacaan (read path)
 - `publicClient` viem pada RPC publik Sepolia (bisa diganti lewat `?rpc=`), refresh tiap 12 s dan saat blok baru (`watchBlockNumber`).
 - Satu **snapshot** per refresh lewat Multicall3: feed `latestRoundData`, per pool: `totalAssets`, `totalSupply`, `reserved`, `escrowedPayouts`, `netVega`, `freeLiquidity`, `sigmaMarkNow`, `vol.sigmaBase`, `capitalRefPrev`, `tradingPaused`, `usdg.balanceOf(pool)`, `board(id)` untuk tiap board, `series(id)` untuk 12 seri, `quoteBuy(id, 1e18)` dan `quoteClose(id, 1e18)` untuk seri terbuka (revert `SeriesExpired`/`OracleStale` ditampilkan sebagai status, bukan error), dan bila wallet terhubung: saldo USDG, share, `token.balanceOf(user, id)`.
-- **Counter gas A vs B**: `estimateGas` untuk `buy(seriesId, 1e18, maxUint)` dengan `account = owner` (`0x9035…`, yang punya saldo & allowance) pada seri ATM terdekat, dicetak berdampingan dengan rasio — tulisan kecil menjelaskan bahwa ini estimasi `eth_estimateGas` (bukan receipt) dan bahwa program Stylus cached.
+- **Counter gas A vs B**: `estimateGas` untuk `buy(seriesId, 1e18, maxUint)` dengan `account = owner` (`0x9035…`, yang punya saldo & allowance) pada seri ATM terdekat, dicetak berdampingan dengan rasio — tulisan kecil menjelaskan bahwa ini estimasi `eth_estimateGas` (bukan receipt), bahwa program Stylus cached, dan bahwa σ dihitung engine bersama sehingga selisihnya hanya jalur pricing (K4); tautan ke tabel devnode apples-to-apples di BENCHMARK.
 - Event: `getLogs` dari `deployedAtBlock` untuk `Bought/Closed/Settled/Claimed` (kedua pool) dan `Observed` (vol engine) — dipakai panel Aktivitas dan grafik σ_base (SVG sederhana, sumbu waktu).
 
 ### 4.3 Panel
-1. **Header**: nama, chain (421614) + status RPC, harga feed & umur round, blok; A vs B: σ_base, σ_mark(0), util, kapital referensi, `tradingPaused`.
+1. **Header**: nama, chain (421614) + status RPC, harga feed & umur round, blok; σ_base/σ_mark(0) (engine bersama, K4); per pool A/B: util, kapital referensi, `tradingPaused`.
 2. **Papan seri**: tabel 12 baris × kolom {expiry, strike, C/P, OI A/B, premi beli/unit A | B, proceeds tutup/unit A | B, Δ, vega, status (terbuka/blackout/expired/settled + `payoutPerUnit`)}; baris identik → tanda ✓ "identik"; **kolom gas buy A vs B**.
 3. **NAV**: per pool: kas, escrow, reserved, liability MtM (= kas − escrow − NAV), NAV, NAV/share, util, netVega; share & nilai milik wallet.
 4. **Trade** (aktif setelah connect): pilih pool (A/B; default B), **faucet** (`MockUSDG.mint(me, 100_000e6)`), **approve** (max), **deposit/redeem** (input USDG/share, preview lewat `previewDeposit/previewRedeem`), **buy** (seri + ukuran; `quoteBuy` live; `maxPremium = (premi+fee) × 1,01`), **close** (ukuran ≤ saldo; `minProceeds = quote × 0,99`), **claim** (seri settled; payout yang akan diterima). Setiap tx: tombol → tanda tangan → hash + link Arbiscan → refresh snapshot. Chain salah → `wallet_switchEthereumChain` (dan `wallet_addEthereumChain` bila perlu). Peta error selector → pesan (mis. `UtilizationExceeded` → "cap utilisasi 80 % tercapai — kapital referensi di-lag 1 hari").
