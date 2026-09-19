@@ -9,5 +9,28 @@
   "bench": "0x5801Aa89eAdABDE9ea21D2e26858760F8B71f346",
   "programInitGas": "30919 4623",
   "programMemoryFootprintPages": 1,
-  "deployedAt": "2026-09-19T22:10:52Z"
+  "deployedAt": "2026-09-19T22:10:52Z",
+  "pools": {
+    "deployer": "0xeb64b16e491f82497ea545a65b3db3d3e6c92df3",
+    "deployTx": "0x72ed0db07b499d2b3fe2c136ca73dc50e8257e91305ee18659d19ee25fc778fc",
+    "usdg": "0xbd1cb2556b5a2ad232f913a5390d57a7f35942c1",
+    "feed": "0xd30e2101a97dcbaebcbc04f14c3f624e67a35165",
+    "sequencerFeed": "0x5154d98ac5c21aac01c0db923db484a7364139ff",
+    "vol": "0xc331031a1730a567fd9149d5950912a1cdcb6a3e",
+    "A": {
+      "label": "control (BlackScholesSol)",
+      "pool": "0x627b099c3e475f851d15ca9f261cd2f5b8b8be08",
+      "token": "0xb275911e4d0af3640d48234d6f1cdce6f43aacc6",
+      "math": "0x5b239ae1510aed1bb21eb9d2e8a471d45720c4b3"
+    },
+    "B": {
+      "label": "Equinox (Stylus)",
+      "pool": "0x7f79616217cc49edea777108b60981d7bf807cc9",
+      "token": "0x2ce0ead79441bf9e1bba8075aef031da98ed70d0",
+      "math": "0xb3b37050a40b9755001bddd29cc5df17a59f51d4"
+    },
+    "deployedAtBlock": 310687948,
+    "deployedAt": "2026-09-19T23:38:08Z",
+    "boards": []
+  }
 }
