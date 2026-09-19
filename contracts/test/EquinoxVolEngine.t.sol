@@ -101,4 +101,18 @@ contract EquinoxVolEngineTest is Test {
         vm.expectRevert();
         vol.setParams(p);
     }
+
+    /// R3-b: sigmaMax*(1+spread) must stay within the math domain's SIGMA_MAX (5e18), or EquinoxPool's
+    /// vega-sign-aware spread could price a close at an out-of-domain sigma. Constructor-level (not setParams,
+    /// so the 6h rate limit doesn't get in the way).
+    function test_sigmaMax_bounded_by_spread_headroom() public {
+        BlackScholesSol math2 = new BlackScholesSol();
+        EquinoxVolEngine.Params memory tooHigh = EquinoxVolEngine.Params(0.94e18, 1.15e18, 0.3e18, 0.05e18, 0.2e18, 4.8e18);
+        vm.expectRevert(abi.encodeWithSelector(EquinoxVolEngine.ParamOutOfBounds.selector, uint8(5)));
+        new EquinoxVolEngine(address(this), address(feed), address(math2), tooHigh, 0.55e18);
+
+        EquinoxVolEngine.Params memory ok = EquinoxVolEngine.Params(0.94e18, 1.15e18, 0.3e18, 0.05e18, 0.2e18, 4.7e18);
+        EquinoxVolEngine vol2 = new EquinoxVolEngine(address(this), address(feed), address(math2), ok, 0.55e18);
+        assertEq(address(vol2.feed()), address(feed));
+    }
 }

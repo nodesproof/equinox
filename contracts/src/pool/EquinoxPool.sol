@@ -278,20 +278,25 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     /// @notice Kuotasi beli: σ_buy = σ_mark(util setelah trade) × (1 ± spread); premi ≥ floor (FR-13, FR-14, FR-23).
     /// @dev `q.vegaTotal` dihitung pada σ_buy (setelah dampak inventaris + spread), bukan σ_mark mid — sengaja
     ///      konservatif (lebih besar) untuk pembukuan `netVega`/vega cap di `buy`. Arah spread mengikuti tanda vega
-    ///      unit pada σ_now: `+spread` bila vega ≥ 0 (kasus normal), `−spread` bila negatif (capped call dekat S/2
-    ///      pada σ tinggi — R2-c), agar `quoteClose < quoteBuy` tetap benar di kedua kasus.
+    ///      unit pada σ₀ = σ_mark(0) (R3-a; sebelumnya σ_now = σ_mark(util) — lihat `quoteClose`): `+spread` bila
+    ///      vega ≥ 0 (kasus normal), `−spread` bila negatif (capped call dekat S/2 pada σ tinggi — R2-c). Harga per
+    ///      unit di-clamp `max(p_buy, p0)` — pool tidak pernah menjual di bawah mark σ₀ (R3-a); dikombinasikan
+    ///      dengan clamp `min` di `quoteClose`, ini menjamin `quoteBuy ≥ p0 ≥ quoteClose` untuk tanda vega & rilis
+    ///      berapa pun, sehingga NAV (yang di-mark pada σ₀, lihat `_liabilityWad`) tidak pernah turun akibat trade —
+    ///      inilah yang menutup sandwich deposit/redeem residual yang C-1+R2-a sendiri belum tutup (lihat R3-a).
     function quoteBuy(uint256 seriesId, uint256 size) public view returns (QuoteOut memory q) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
         uint256 t = _years(sr.expiry);
-        uint256 sigmaNow = vol.sigmaMark(_util(netVega));
-        (, , int256 vegaUnit) = _price(s, sr.strike, t, sigmaNow, sr.isCall);
-        uint256 vegaTotal = (vegaUnit > 0 ? uint256(vegaUnit) : 0) * size / WAD;
-        bool posVega = vegaUnit >= 0;
+        uint256 sigma0 = vol.sigmaMark(0);
+        (uint256 p0, , int256 vega0) = _price(s, sr.strike, t, sigma0, sr.isCall);
+        uint256 vegaTotal = (vega0 > 0 ? uint256(vega0) : 0) * size / WAD;
+        bool posVega = vega0 >= 0;
         uint256 spread = vol.spread();
         uint256 sigmaBuy = vol.sigmaMark(_util(netVega + vegaTotal)) * (posVega ? (WAD + spread) : (WAD - spread)) / WAD;
-        (uint256 p, int256 delta, int256 vegaBuySigned) = _price(s, sr.strike, t, sigmaBuy, sr.isCall);
+        (uint256 pBuy, int256 delta, int256 vegaBuySigned) = _price(s, sr.strike, t, sigmaBuy, sr.isCall);
         uint256 vegaBuy = vegaBuySigned > 0 ? uint256(vegaBuySigned) : 0;
+        uint256 p = pBuy > p0 ? pBuy : p0; // R3-a: never sell below the mark
         uint256 premiumWad = p * size / WAD;
         uint256 floorWad = uint256(sr.strike) * size / WAD * cfg.minPremiumBps / 10_000;
         if (premiumWad < floorWad) premiumWad = floorWad;
@@ -304,19 +309,22 @@ contract EquinoxPool is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Kuotasi tutup: σ_close = σ_mark(util setelah tutup) × (1 ∓ spread); proceeds dibulatkan ke bawah.
-    /// @dev Arah spread mengikuti tanda vega unit pada σ_now (sama seperti `quoteBuy`, dihitung ulang di sini):
-    ///      `−spread` bila vega ≥ 0, `+spread` bila negatif — menjamin `quoteClose < quoteBuy` di kedua kasus (R2-c).
+    /// @dev Arah spread mengikuti tanda vega unit pada σ₀ = σ_mark(0) (R3-a; dihitung ulang di sini sama seperti
+    ///      `quoteBuy`): `−spread` bila vega ≥ 0, `+spread` bila negatif. Harga per unit di-clamp `min(p_close, p0)`
+    ///      — pool tidak pernah membeli balik di atas mark σ₀ (R3-a), menjamin `quoteBuy ≥ p0 ≥ quoteClose` untuk
+    ///      tanda vega & rilis berapa pun (lihat NatSpec `quoteBuy`).
     function quoteClose(uint256 seriesId, uint256 size) public view returns (uint256 proceedsAssets, uint256 sigmaClose, uint256 spotWad) {
         Series storage sr = _openSeries(seriesId);
         uint256 s = _requireFresh();
         uint256 t = _years(sr.expiry);
         uint256 rel = _vegaRelease(sr, size);
-        uint256 sigmaNow = vol.sigmaMark(_util(netVega));
-        (, , int256 vegaUnit) = _price(s, sr.strike, t, sigmaNow, sr.isCall);
-        bool posVega = vegaUnit >= 0;
+        uint256 sigma0 = vol.sigmaMark(0);
+        (uint256 p0, , int256 vega0) = _price(s, sr.strike, t, sigma0, sr.isCall);
+        bool posVega = vega0 >= 0;
         uint256 spread = vol.spread();
         sigmaClose = vol.sigmaMark(_util(netVega - rel)) * (posVega ? (WAD - spread) : (WAD + spread)) / WAD;
-        (uint256 p, , ) = _price(s, sr.strike, t, sigmaClose, sr.isCall);
+        (uint256 pClose, , ) = _price(s, sr.strike, t, sigmaClose, sr.isCall);
+        uint256 p = pClose < p0 ? pClose : p0; // R3-a: never buy back above the mark
         proceedsAssets = (p * size / WAD) / assetScale;
         spotWad = s;
     }

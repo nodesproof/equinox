@@ -520,10 +520,11 @@ contract EquinoxPoolTest is PoolFixture {
 
     // ------------------------------------------------------------ fix round 2 (security re-review)
 
-    /// R2-a: deposit-dilution sandwich (deposit huge -> buy/close at diluted util -> redeem) must not profit, and
-    /// the live-capital util/cap bypass at buy time must be closed by the capital-ref lag. The trader's setup uses
-    /// 4x45 (not 4x50 as in test_scenario2) so that ~80k WAD of headroom remains under the 80% cap of the lagged
-    /// 1M capital: enough for the attacker's 5e18 probe to fit, not enough for the 40e18 exploit-sized attempt.
+    /// R2-a/R3-a: deposit-dilution sandwich in the LITERAL order -- deposit huge, buy, redeem ALL shares, close --
+    /// must not profit. The trader's setup uses 4x45 (not 4x50 as in test_scenario2) so that ~80k WAD of headroom
+    /// remains under the 80% cap of the lagged 1M capital: enough for a 5e18/19e18 probe to fit, not enough for
+    /// the 40e18 exploit-sized attempt (that leg alone proves the capital-ref lag; the assertion at the end proves
+    /// R3-a's p0 clamp closes the residual "buy cheap, redeem, close expensive" sandwich the re-review found).
     function test_dilution_sandwich_cannot_profit() public {
         lpDeposit(1_000_000e6);
         (, uint64 expiry, ) = listBoard7d();
@@ -532,25 +533,52 @@ contract EquinoxPoolTest is PoolFixture {
 
         uint256 idC4200 = sid(expiry, 4200e18, true);
         address attacker = makeAddr("dilutionAttacker");
+        // Mints exactly 20M total (matching the literal recipe); deposits slightly under 20M, keeping a small
+        // trading reserve drawn from that SAME 20M so the final "< 20_000_000e6" check compares against their
+        // true total starting capital, not an inflated baseline -- the literal deposit-all-then-buy order leaves
+        // zero spare cash at deposit time to pay for the buy otherwise.
         usdg.mint(attacker, 20_000_000e6);
         vm.startPrank(attacker);
         usdg.approve(address(pool), type(uint256).max);
-        uint256 shares = pool.deposit(20_000_000e6, attacker);
+        uint256 shares = pool.deposit(19_995_000e6, attacker);
 
         vm.expectRevert(EquinoxPool.UtilizationExceeded.selector);
         pool.buy(idC4200, 40e18, type(uint256).max); // capital for caps is still the lagged 1M, not diluted live cash
 
-        // Undilute first: redeem all LP shares before trading the option, so the small trade's spread-profit
-        // accrues to the (now sole) original LP rather than being partly recaptured by the attacker's own
-        // redeem -- isolating the R2-a property (mispriced buy/close via util manipulation) from that unrelated
-        // large-depositor-owns-most-of-the-NAV effect. capitalForCaps was pinned at 1M throughout regardless
-        // (min(live, capitalRefPrev), and capitalRefPrev never ages within this single block either way).
+        pool.buy(idC4200, 5e18, type(uint256).max); // fits inside the remaining ~80k headroom
         pool.redeem(shares, attacker, attacker);
-        pool.buy(idC4200, 5e18, type(uint256).max); // fits inside the remaining ~80k headroom, paid from redeemed cash
         pool.close(idC4200, 5e18, 0);
         vm.stopPrank();
 
         assertLt(usdg.balanceOf(attacker), 20_000_000e6, "dilution sandwich must not profit");
+    }
+
+    /// Same sandwich at the maximum size that fits the ~80k headroom (19e18 * 4200 = 79,800e18 <= 80,000e18;
+    /// 20e18 would exceed it).
+    function test_dilution_sandwich_max_size_cannot_profit() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 idC4000 = sid(expiry, 4000e18, true);
+        for (uint256 i = 0; i < 4; i++) traderBuy(idC4000, 45e18);
+
+        uint256 idC4200 = sid(expiry, 4200e18, true);
+        address attacker = makeAddr("dilutionAttackerMax");
+        // Same reasoning as test_dilution_sandwich_cannot_profit above: mint exactly 20M, deposit slightly under
+        // it, keep the rest (from the same 20M) as the trading reserve for the larger 19e18 leg's premium.
+        usdg.mint(attacker, 20_000_000e6);
+        vm.startPrank(attacker);
+        usdg.approve(address(pool), type(uint256).max);
+        uint256 shares = pool.deposit(19_990_000e6, attacker);
+
+        vm.expectRevert(EquinoxPool.UtilizationExceeded.selector);
+        pool.buy(idC4200, 40e18, type(uint256).max);
+
+        pool.buy(idC4200, 19e18, type(uint256).max); // max size that fits the remaining ~80k headroom
+        pool.redeem(shares, attacker, attacker);
+        pool.close(idC4200, 19e18, 0);
+        vm.stopPrank();
+
+        assertLt(usdg.balanceOf(attacker), 20_000_000e6, "dilution sandwich must not profit at max size either");
     }
 
     /// R2-a: the capital-ref lag is an observable two-step delay matching CAPITAL_REF_DELAY, not just a
@@ -656,5 +684,87 @@ contract EquinoxPoolTest is PoolFixture {
         EquinoxPool.QuoteOut memory qbAtm = pool.quoteBuy(idAtm, 1e18);
         (uint256 qcAtmProceeds, , ) = pool.quoteClose(idAtm, 1e18);
         assertLt(qcAtmProceeds, qbAtm.premiumAssets, "quoteClose < quoteBuy for a normal ATM series too");
+    }
+
+    // ------------------------------------------------------------ fix round 3 (security re-review)
+
+    /// R3-a: no trade may cross the NAV mark (sigma0 = vol.sigmaMark(0)) -- quoteBuy >= p0 >= quoteClose always,
+    /// which is what makes the deposit/redeem sandwich structurally unprofitable (every trade is NAV-non-decreasing
+    /// for the pool). Also confirms the clamp is actually engaged in this state (the unclamped close sigma sits
+    /// above sigma0), not vacuously true because util happened to be low.
+    function test_trades_never_cross_mark() public {
+        lpDeposit(1_000_000e6);
+        (, uint64 expiry, ) = listBoard7d();
+        uint256 idC4000 = sid(expiry, 4000e18, true);
+        for (uint256 i = 0; i < 4; i++) traderBuy(idC4000, 45e18); // util well above 17.5%
+
+        uint256 id = sid(expiry, 4200e18, true);
+        traderBuy(id, 10e18); // open position on this series so quoteClose(size) has OI to release
+
+        uint256 size = 1e18;
+        uint256 t = uint256(WEEK) * WAD / 31_536_000;
+        uint256 sigma0 = vol.sigmaMark(0);
+        (uint256 p0Wad, , ) = mathSol.cappedCall(4000e18, 4200e18, 8400e18, t, sigma0, 0);
+        uint256 p0ProceedsFloor = p0Wad * size / WAD / 1e12;
+        uint256 p0PremiumCeil = (p0Wad * size / WAD + 1e12 - 1) / 1e12;
+
+        (uint256 qc, , ) = pool.quoteClose(id, size);
+        assertLe(qc, p0ProceedsFloor, "close must never pay above the mark");
+
+        EquinoxPool.QuoteOut memory qb = pool.quoteBuy(id, size);
+        assertGe(qb.premiumAssets, p0PremiumCeil, "buy must never charge below the mark");
+
+        // Confirm the clamp is actually engaged here: the unclamped close sigma sits above sigma0.
+        (, , , , , uint256 oi, uint256 vegaAcc, ) = pool.series(id);
+        uint256 rel = vegaAcc * size / oi;
+        uint256 vegaCap = 1_000_000e18 * 500 / 10_000; // capital-for-caps still pinned at the bootstrapped 1M
+        uint256 netVegaAfter = pool.netVega() - rel;
+        uint256 utilAfter = netVegaAfter * WAD / vegaCap;
+        if (utilAfter > WAD) utilAfter = WAD;
+        uint256 sigmaCloseUnclamped = vol.sigmaMark(utilAfter) * (WAD - vol.spread()) / WAD;
+        assertGt(sigmaCloseUnclamped, sigma0, "the price clamp must actually be engaged in this state");
+    }
+
+    /// R2-c/R3-a large-release property test (the re-reviewer's probe). A sizeable position is bought while the
+    /// strike is deep ITM (K=3000, S=4000), then the spot is rallied to 6000 over two ticks >= 1 day apart (so the
+    /// strike drifts to exactly S/2 -- the negative-unit-vega regime -- and the EWMA reacts, sigma_base ~1.42) and
+    /// most of the position is closed. quoteClose must never exceed quoteBuy for the same size, and (after R3-a)
+    /// neither may cross the sigma0 mark.
+    ///
+    /// Reproduction note: despite a sustained, varied effort against this exact HEAD (unit vega at K=3000/S=4000
+    /// measured directly at ~1.42 WAD/unit, not the "a few hundred WAD" estimated in the ruling; tried the full
+    /// 264e18 release, a 1e18 sliver, and this 200e18 majority-release, all after the same two-tick rally to
+    /// sigma_base ~1.42), quoteClose stayed strictly below quoteBuy at HEAD (f7661f7) in every variant tried --
+    /// the inversion the re-reviewer measured (186,872 > 186,156) was not reproduced here, most likely because it
+    /// depends on exact parameters (config/feed timing/vol seed) not fully specified in the ruling. Kept as a green
+    /// property test per the ruling's explicit fallback, not silently skipped.
+    function test_negative_vega_large_release_no_inversion() public {
+        lpDeposit(1_000_000e6);
+        uint64 expiry = uint64(T0 + WEEK);
+        uint128[] memory ks = new uint128[](1);
+        ks[0] = 3000e18;
+        pool.createBoard(expiry, ks);
+        uint256 id = sid(expiry, 3000e18, true);
+
+        for (uint256 i = 0; i < 6; i++) traderBuy(id, 44e18); // 264e18 total, near the 800k reserve cap (264*3000=792k)
+
+        vm.warp(T0 + 1 days);
+        tick(5000e8); // rally step 1
+        vol.poke(); // quoteBuy/quoteClose are view -- poke explicitly so the EWMA actually reacts to the tick
+        vm.warp(T0 + 2 days);
+        tick(6000e8); // rally step 2: K = 3000 becomes S/2, and the EWMA has now reacted to two big jumps
+        vol.poke();
+
+        uint256 size = 200e18; // close most of the large existing position
+        (uint256 qc, , ) = pool.quoteClose(id, size);
+        EquinoxPool.QuoteOut memory qb = pool.quoteBuy(id, size);
+        assertLe(qc, qb.premiumAssets, "quoteClose must never exceed quoteBuy after a large release");
+
+        // R3-a: neither side may cross the sigma0 mark either.
+        uint256 t = uint256(expiry - block.timestamp) * WAD / 31_536_000;
+        uint256 sigma0 = vol.sigmaMark(0);
+        (uint256 p0Wad, , ) = mathSol.cappedCall(6000e18, 3000e18, 6000e18, t, sigma0, 0);
+        assertLe(qc, p0Wad * size / WAD / 1e12, "close must never pay above the mark");
+        assertGe(qb.premiumAssets, (p0Wad * size / WAD + 1e12 - 1) / 1e12, "buy must never charge below the mark");
     }
 }

@@ -118,6 +118,12 @@ contract EquinoxVolEngine is Ownable2Step {
         if (p.spread < 0.005e18 || p.spread > 0.2e18) revert ParamOutOfBounds(3);
         if (p.sigmaMin < 0.05e18) revert ParamOutOfBounds(4);
         if (p.sigmaMax > 5e18 || p.sigmaMax <= p.sigmaMin) revert ParamOutOfBounds(5);
+        // R3-b: EquinoxPool's vega-sign-aware spread can price a close/buy at sigmaMark(u)*(1+spread) even when
+        // the unit vega is negative (capped call near S/2 at high sigma) -- keep sigmaMax*(1+spread) inside the
+        // math domain's SIGMA_MAX (5e18) so close() (which must never revert) can't hit OutOfDomain. The lower
+        // side is implied: sigmaMin >= 0.05e18 and spread <= 0.2e18 give sigma*(1-spread) >= 0.04e18, comfortably
+        // above the domain's SIGMA_MIN (0.01e18).
+        if (p.sigmaMax * (WAD + p.spread) / WAD > 5e18) revert ParamOutOfBounds(5);
     }
 
     function _withinRel(uint256 oldV, uint256 newV) internal pure returns (bool) {
