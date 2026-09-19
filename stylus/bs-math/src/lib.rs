@@ -11,6 +11,7 @@ pub mod constants;
 pub mod error;
 pub mod fixed;
 pub mod exp;
+pub mod ln;
 
 pub use alloy_primitives::{I256, U256};
 pub use error::MathError;
