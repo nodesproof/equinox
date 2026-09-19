@@ -6,7 +6,6 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use bs_math::fixed::{to_i};
 use bs_math::MathError;
 use stylus_sdk::{
     alloy_primitives::{I256, U256},
@@ -116,7 +115,3 @@ impl BlackScholes {
         Ok((ui(mid)?, vega))
     }
 }
-
-// `to_i` dipakai crate lain; simpan re-export kecil agar tidak ada warning unused.
-#[allow(dead_code)]
-fn _keep(x: U256) -> Result<I256, MathError> { to_i(x) }
