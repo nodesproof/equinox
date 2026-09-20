@@ -17,7 +17,8 @@ const synthetic = (blockTime: number, spot: number, settledBoard: number | null 
   series: ALL_SERIES.map((ref) => ({ ref, A: state(ref.boardId === settledBoard), B: state(ref.boardId === settledBoard) })),
   user: null,
 });
-const expiry0 = BOARDS[0]!.expiry, expiry1 = BOARDS[1]!.expiry;
+// Semua dari BOARDS (manifest bisa bertambah board 9/16 Okt): expiry0/expiry1 = dua board pertama, lastExpiry = board terakhir.
+const expiry0 = BOARDS[0]!.expiry, expiry1 = BOARDS[1]!.expiry, lastExpiry = Math.max(...BOARDS.map((b) => b.expiry));
 
 describe('atmSeries', () => {
   it('picks the nearest-strike call on the nearest open board', () => {
@@ -36,6 +37,7 @@ describe('atmSeries', () => {
     expect(far?.ref).toMatchObject({ boardId: 0, strike: 2800, isCall: true });
   });
   it('returns null when every board is expired', () => {
-    expect(atmSeries(synthetic(expiry1 + 1, 2650))).toBeNull();
+    expect(atmSeries(synthetic(lastExpiry + 1, 2650))).toBeNull();
+    expect(atmSeries(synthetic(lastExpiry - 30, 2650))).toBeNull(); // blackout 60 s pada board terakhir pun
   });
 });
