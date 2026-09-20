@@ -34,6 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: stable }   # skrip mem-parsing receipt `cast`; pin agar formatnya stabil
       - name: L3 kontrol Solidity
         run: |
           cd contracts

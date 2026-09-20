@@ -12,6 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: stable }   # skrip mem-parsing receipt `cast`; pin agar formatnya stabil
       - name: poke + settle (Arbitrum Sepolia)
         env:
           KEEPER_PRIVATE_KEY: ${{ secrets.KEEPER_PRIVATE_KEY }}
