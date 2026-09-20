@@ -1,6 +1,6 @@
 # Verifikasi Hari 1 — Equinox (PRD §18)
 
-Diisi 19 September 2026. Baris ✅ sudah diverifikasi dengan perintah yang tertulis; baris ⬜ wajib diisi sebelum Hari 2.
+Diisi 19 September 2026; V9/V9a diperbarui 20 September 2026 (Plan 4 — USDG Paxos ada di Sepolia). Baris ✅ sudah diverifikasi dengan perintah yang tertulis; baris ⬜ wajib diisi sebelum Hari 2.
 
 | # | Item | Perintah | Hasil |
 |---|---|---|---|
@@ -12,7 +12,8 @@ Diisi 19 September 2026. Baris ✅ sudah diverifikasi dengan perintah yang tertu
 | V6 | Chainlink ETH/USD Sepolia: alamat, `decimals()`, heartbeat, deviasi | docs.chain.link → `cast call <feed> "latestRoundData()(uint80,int256,uint256,uint256,uint80)"` | ⬜ |
 | V7 | L2 Sequencer Uptime Feed di Sepolia | docs.chain.link | ⬜ |
 | V8 | Faucet Arbitrum Sepolia | — | ⬜ |
-| V9 | USDG di Arbitrum One: alamat & `decimals()` | Paxos docs → `cast call <usdg> "decimals()(uint8)" --rpc-url https://arb1.arbitrum.io/rpc` | ⬜ (fallback MockUSDG 6 dp) |
+| V9 | USDG Paxos di Arbitrum Sepolia (Plan 4, 20 Sep) / di Arbitrum One | Sepolia: `cast call 0xFFC95faa3d63Cde504a05B567C600B78C0b41892 "name()(string)"` → "Global Dollar"; `"symbol()(string)"` → USDG; `"decimals()(uint8)"` → 6; `"totalSupply()(uint256)"` → 111.012,000100 USDG; `cast call --from 0x1111… <usdg> "mint(address,uint256)" …` → revert `AccountMissingSupplyControllerRole(address)`; Sourcify v2 `GET /v2/contract/421614/<addr>` → `exact_match` untuk proxy (10 Feb 2026) dan implementasi `0x0643bc7146ab7A2dD4Ea10d506ba95E1b933B236` (13 Jul 2026). One: Paxos docs → `cast call <usdg> "decimals()(uint8)" --rpc-url https://arb1.arbitrum.io/rpc` | **Sepolia ✅** — ada, 6 dp, proxy ERC-1967, sumber terverifikasi; klaim lama "tidak ada di Sepolia" (19–20 Sep pagi) **salah, dicabut**. Pool A/B tetap `MockUSDG` (mint tertutup + faucet 100/hari, lihat V9a); Pool C `0xebd255c8324dce0478996d9d40d6642044872e92` ber-aset token asli ini (`asset()` dicek `pool-c.sh status`; trade pertama `0x3ae0a152…4ffc` / `0xd937a992…ffff`, `docs/DEMO_LOG.md`). **One ⬜** — alamat & `decimals()` di Arbitrum One belum diverifikasi |
+| V9a | Faucet USDG Paxos (satu-satunya jalan mendapat USDG asli di Sepolia) | `https://faucet.paxos.com/` — token USDG, jaringan "Arbitrum Sepolia", form alamat saja; bundel JS: `WT=100`, "Limit 1 request per wallet per day"; dipakai 20 Sep untuk owner `0x9035…076D` (saldo 100 USDG → seed Pool C) | ✅ **100 USDG per permintaan, 1 permintaan per wallet per hari** → Pool C berskala faucet (≈ 90 USDG per 20 Sep; 100 per wallet per hari); LP kedua (keeper `0x2e56…a89B`) menunggu permintaannya sendiri |
 | V10 | nitro-devnode | `tools/devnode/up.sh` (image v3.11.4-7d5ac27, upgrade ArbOS 61 otomatis) | ✅ chain 412346, Stylus v3, maxFragments 4; CacheManager devnode = stub |
 | V11 | Foundry tidak bisa eksekusi WASM | `forge test --fork-url http://127.0.0.1:8547` terhadap alamat Stylus | ⬜ (dokumentasikan pesan errornya) |
 | V12 | Pustaka fixed-point Rust untuk Stylus yang teruji | GitHub search | ⬜ — port PRBMath sendiri sudah bit-identik, cukup |
