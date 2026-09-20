@@ -3,11 +3,12 @@ import {
   BaseError, ContractFunctionRevertedError, WaitForTransactionReceiptTimeoutError, createWalletClient, custom, getAddress, type Address, type Hash,
 } from 'viem';
 import { chain, client } from './client';
-import { REVERT_TEXT, type TradeCall } from './trade';
+import type { PoolKey } from '../deployment';
+import { MAX_UINT, REVERT_TEXT, poolCall, type TradeCall } from './trade';
 
 /** Selector error yang tidak ada di ABI pool tetapi bisa menggelembung dari kontrak lain yang dipanggil pool (token ERC-1155 saat close/claim). */
 export const REVERT_SELECTOR: Record<string, string> = { '0x03dee4c5': 'ERC1155InsufficientBalance' };
-/** Tx yang sudah terkirim tetapi gagal (status 0) atau belum terkonfirmasi sampai timeout — hash disimpan agar log tetap punya tautan explorer. */
+/** Tx yang sudah terkirim tetapi gagal (status 0), belum terkonfirmasi sampai timeout, atau receipt-nya gagal dibaca — hash disimpan agar log tetap punya tautan explorer. */
 export class TxFailed extends Error {
   constructor(message: string, readonly hash: Hash) { super(message); this.name = 'TxFailed'; }
 }
@@ -56,6 +57,19 @@ export function decodeRevert(e: unknown): string {
   }
   return e instanceof Error ? e.message : String(e);
 }
+/** Premi yang benar-benar dibayar `buy(id, size)` dari `account` = hasil `simulateContract` `buy(id, size, MAX_UINT)` (nilai kembalian `premiumAssets`).
+ *  `buy` memanggil `_pokeVol()` sebelum menghitung harga, jadi eksekusi memakai σ pada round Chainlink TERBARU; `quoteBuy` (view) memakai round
+ *  terakhir yang sudah diobservasi engine — bila engine lama tidak di-poke, batas 1 % dari kuotasi view gagal `SlippageExceeded` (I-1).
+ *  Revert (allowance/saldo/SeriesExpired/…) dilempar apa adanya — pemanggil mendekode lewat `decodeRevert`. */
+export async function executedBuy(k: PoolKey, id: bigint, size: bigint, account: Address): Promise<bigint> {
+  const { result } = await client.simulateContract({ ...poolCall(k), functionName: 'buy', args: [id, size, MAX_UINT], account });
+  return result;
+}
+/** Proceeds yang benar-benar diterima `close(id, size)` dari `account` = hasil simulasi `close(id, size, 0)` (alasan yang sama dengan `executedBuy`). */
+export async function executedClose(k: PoolKey, id: bigint, size: bigint, account: Address): Promise<bigint> {
+  const { result } = await client.simulateContract({ ...poolCall(k), functionName: 'close', args: [id, size, 0n], account });
+  return result;
+}
 /** simulate (eth_call lewat RPC publik, revert didekode sebelum popup wallet) → write lewat wallet → tunggu receipt; mengembalikan hash. */
 export async function write(call: TradeCall, account: Address): Promise<Hash> {
   await ensureChain();
@@ -69,7 +83,8 @@ export async function write(call: TradeCall, account: Address): Promise<Hash> {
   try { status = (await client.waitForTransactionReceipt({ hash })).status; }
   catch (e) {
     if (e instanceof WaitForTransactionReceiptTimeoutError) throw new TxFailed('Transaction not confirmed within 3 minutes — check it on the explorer', hash);
-    throw e;
+    // Error lain saat menunggu receipt (RPC putus/429, blok tak ditemukan) — tx-nya mungkin sudah masuk; simpan hash agar log tetap punya tautan explorer.
+    throw new TxFailed(`Receipt lookup failed (${decodeRevert(e)}) — check it on the explorer`, hash);
   }
   if (status !== 'success') throw new TxFailed('Transaction reverted on-chain (status 0)', hash);
   return hash;

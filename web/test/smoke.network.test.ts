@@ -9,8 +9,8 @@ import { ALL_SERIES, POOLS, RPC_URL, USDG, explorerTx } from '../src/deployment'
 import { equinoxPoolAbi } from '../src/abi/equinoxPool';
 import { equinoxOptionTokenAbi } from '../src/abi/equinoxOptionToken';
 import { mockUsdgAbi } from '../src/abi/mockUsdg';
-import { ALLOWANCE_MIN, approveCall, buyCall, closeCall, depositCall, faucetCall, redeemCall, seriesLabel, type TradeCall } from '../src/chain/trade';
-import { decodeRevert } from '../src/chain/wallet';
+import { ALLOWANCE_MIN, approveCall, buyCall, closeCall, depositCall, faucetCall, redeemCall, scaleFee, seriesLabel, type TradeCall } from '../src/chain/trade';
+import { decodeRevert, executedBuy, executedClose } from '../src/chain/wallet';
 
 const enabled = process.env.EQUINOX_SMOKE === '1';
 const POOL = 'B' as const;
@@ -67,14 +67,17 @@ describe.skipIf(!enabled)('smoke: real transactions on Pool B, board 1, from the
     expect(minted > 0n, 'deposit minted shares').toBe(true);
     console.log(`deposit minted ${minted} shares`);
 
+    // Batas slippage dari jalur eksekusi (post-poke), sama dengan panel Trade: kuotasi view hanya untuk rasio fee dan log (I-1).
     const q = await client.readContract({ ...pool, functionName: 'quoteBuy', args: [id, SIZE] });
-    console.log(`quoteBuy 0.01: premium=${q.premiumAssets} fee=${q.feeAssets} sigma=${q.sigma} spot=${q.spotWad}`);
-    await send(`buy 0.01 ${seriesLabel(ref)}`, buyCall(POOL, id, SIZE, q.premiumAssets, q.feeAssets));
+    const premExec = await executedBuy(POOL, id, SIZE, me);
+    console.log(`quoteBuy 0.01: premium=${q.premiumAssets} fee=${q.feeAssets} sigma=${q.sigma} spot=${q.spotWad}; executed premium=${premExec}`);
+    await send(`buy 0.01 ${seriesLabel(ref)}`, buyCall(POOL, id, SIZE, premExec, scaleFee(q.feeAssets, q.premiumAssets, premExec)));
     expect((await read()).position).toBe(SIZE);
 
     const [proceeds, sigmaClose] = await client.readContract({ ...pool, functionName: 'quoteClose', args: [id, SIZE] });
-    console.log(`quoteClose 0.01: proceeds=${proceeds} sigmaClose=${sigmaClose}`);
-    await send(`close 0.01 ${seriesLabel(ref)}`, closeCall(POOL, id, SIZE, proceeds));
+    const proceedsExec = await executedClose(POOL, id, SIZE, me);
+    console.log(`quoteClose 0.01: proceeds=${proceeds} sigmaClose=${sigmaClose}; executed proceeds=${proceedsExec}`);
+    await send(`close 0.01 ${seriesLabel(ref)}`, closeCall(POOL, id, SIZE, proceedsExec));
 
     await send(`redeem ${minted} shares`, redeemCall(POOL, minted, me));
 

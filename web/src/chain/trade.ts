@@ -14,15 +14,22 @@ export const ALLOWANCE_MIN = 10n ** 12n;
 /** Ukuran minimum kontrak (`cfg.minSize` = 0,01 unit, WAD). */
 export const MIN_SIZE = 10n ** 16n;
 
-/** maxPremium = (premi + fee) × (1 + slippage), dibulatkan ke bawah — kontrak membandingkan premi+fee terhadap batas ini. */
+/** maxPremium = (premi + fee) × (1 + slippage), dibulatkan ke bawah — kontrak membandingkan premi+fee terhadap batas ini.
+ *  `premium`/`fee` harus dari JALUR EKSEKUSI (`executedBuy` + `scaleFee`), bukan dari `quoteBuy`: `buy` memanggil `_pokeVol()` dulu sehingga
+ *  harganya memakai round Chainlink terbaru, sedangkan `quoteBuy` (view) memakai round terakhir yang sudah diobservasi engine (I-1). */
 export const maxPremium = (premium: bigint, fee: bigint) => ((premium + fee) * (10_000n + SLIPPAGE_BPS)) / 10_000n;
-/** minProceeds = proceeds × (1 − slippage), dibulatkan ke bawah. */
+/** minProceeds = proceeds × (1 − slippage), dibulatkan ke bawah; `proceeds` dari `executedClose` (alasan yang sama dengan `maxPremium`). */
 export const minProceeds = (proceeds: bigint) => (proceeds * (10_000n - SLIPPAGE_BPS)) / 10_000n;
+/** Fee pada premi eksekusi, diskalakan dari rasio kuotasi view (fee = `feeBps` × premi, dibulatkan ke atas on-chain; +1 menutup pembulatan).
+ *  Premi kuotasi 0 (tidak mungkin pada floor 5 bps × K, tetapi dijaga) → fee kuotasi apa adanya. */
+export const scaleFee = (feeQuote: bigint, premQuote: bigint, premExec: bigint) => (premQuote === 0n ? feeQuote : (feeQuote * premExec) / premQuote + 1n);
 
 /** Bentuk longgar yang diterima `simulateContract`/`writeContract`/`estimateContractGas` (ABI dilebarkan agar bisa dilewatkan sebagai satu tipe). */
 export interface TradeCall { address: Address; abi: readonly unknown[]; functionName: string; args: readonly unknown[] }
 
-const pool = (k: PoolKey) => ({ address: POOLS[k].pool, abi: equinoxPoolAbi } as const);
+/** Target pool (alamat + ABI) untuk `readContract`/`simulateContract`. */
+export const poolCall = (k: PoolKey) => ({ address: POOLS[k].pool, abi: equinoxPoolAbi } as const);
+const pool = poolCall;
 export const buyCall = (k: PoolKey, id: bigint, size: bigint, premium: bigint, fee: bigint) => ({ ...pool(k), functionName: 'buy', args: [id, size, maxPremium(premium, fee)] } as const);
 export const closeCall = (k: PoolKey, id: bigint, size: bigint, proceeds: bigint) => ({ ...pool(k), functionName: 'close', args: [id, size, minProceeds(proceeds)] } as const);
 export const claimCall = (k: PoolKey, id: bigint, amount: bigint) => ({ ...pool(k), functionName: 'claim', args: [id, amount] } as const);

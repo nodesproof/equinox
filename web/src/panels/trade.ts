@@ -5,10 +5,10 @@ import { shortAddr, shortHash, usdg, usdg6, wad } from '../ui/format';
 import { ALL_SERIES, POOLS, POOL_KEYS, explorerAddress, explorerTx, type PoolKey } from '../deployment';
 import { chain, client } from '../chain/client';
 import { equinoxPoolAbi } from '../abi/equinoxPool';
-import { TxFailed, connect, decodeRevert, ensureChain, hasWallet, onWalletEvents, write } from '../chain/wallet';
+import { TxFailed, connect, decodeRevert, ensureChain, executedBuy, executedClose, hasWallet, onWalletEvents, write } from '../chain/wallet';
 import {
-  ALLOWANCE_MIN, FAUCET_AMOUNT, MIN_SIZE, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds, redeemCall, seriesLabel,
-  type TradeCall,
+  ALLOWANCE_MIN, FAUCET_AMOUNT, MIN_SIZE, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds, redeemCall, scaleFee,
+  seriesLabel, type TradeCall,
 } from '../chain/trade';
 import type { Panel } from './types';
 import type { Snapshot } from '../chain/snapshot';
@@ -48,7 +48,8 @@ export function createTrade(): TradePanel {
     el('a', { href: ETH_FAUCET, target: '_blank', rel: 'noopener', text: 'QuickNode faucet ↗' }),
     ', then reload. USDG is a mock token minted from the faucet button below (no real value).');
   const gasNote = el('p', { class: 'muted small' }, 'Gas is Sepolia ETH (', el('a', { href: ETH_FAUCET, target: '_blank', rel: 'noopener', text: 'faucet ↗' }),
-    '); every action is simulated first (eth_call) so a revert is decoded here before the wallet opens. Slippage 1 % on buy (max premium + fee) and close (min proceeds).');
+    '); every action is simulated first (eth_call) so a revert is decoded here before the wallet opens. Buy/close previews are indicative (view quotes at the last observed ',
+    'Chainlink round); execution observes the newest round first, so the 1 % slippage caps (max premium + fee, min proceeds) come from a simulation of the executed path.');
 
   // --- form ---
   const radios = POOL_KEYS.map((k) => el('input', { type: 'radio', name: 'pool', value: k, checked: k === pool }));
@@ -143,23 +144,38 @@ export function createTrade(): TradePanel {
     try { const a = await client.readContract({ ...poolCall(), functionName: 'previewRedeem', args: [shares] }); if (n === seq.redeem) setText(redeemPrev, `→ ${usdg6(a)} USDG`); }
     catch (e) { if (n === seq.redeem) setText(redeemPrev, decodeRevert(e)); }
   }
+  // Kuotasi view = indikatif (round terakhir yang diobservasi engine); nilai eksekusi (post-poke) ditampilkan bila ada akun dan simulasinya lolos —
+  // simulasi yang gagal (belum approve/tanpa USDG) tidak menutupi kuotasi indikatif.
   async function previewBuy() {
-    const n = ++seq.buy, i = selected(buySel), size = parse(buyIn.value, 18);
+    const n = ++seq.buy, i = selected(buySel), size = parse(buyIn.value, 18), k = pool, acct = account;
     if (i === null || !size) return setText(buyPrev, '');
     if (size < MIN_SIZE) return setText(buyPrev, 'minimum size is 0.01 units');
+    const id = ALL_SERIES[i]!.id[k];
     try {
-      const q = await client.readContract({ ...poolCall(), functionName: 'quoteBuy', args: [ALL_SERIES[i]!.id[pool], size] });
-      if (n === seq.buy) setText(buyPrev, `premium ${usdg6(q.premiumAssets)} + fee ${usdg6(q.feeAssets)} = ${usdg6(q.premiumAssets + q.feeAssets)} USDG (max ${usdg6(maxPremium(q.premiumAssets, q.feeAssets))}) · σ ${wad(q.sigma, 3)} · Δ ${wad(q.delta, 2)}`);
+      const [q, exec] = await Promise.all([
+        client.readContract({ ...poolCallOf(k), functionName: 'quoteBuy', args: [id, size] }),
+        acct ? executedBuy(k, id, size, acct).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (n !== seq.buy) return;
+      const fee = exec === null ? null : scaleFee(q.feeAssets, q.premiumAssets, exec);
+      setText(buyPrev, `premium ${usdg6(q.premiumAssets)} + fee ${usdg6(q.feeAssets)} = ${usdg6(q.premiumAssets + q.feeAssets)} USDG (indicative) · σ ${wad(q.sigma, 3)} · Δ ${wad(q.delta, 2)}`
+        + (exec === null || fee === null ? '' : ` · executed ≈ ${usdg6(exec + fee)} USDG (max ${usdg6(maxPremium(exec, fee))})`));
     } catch (e) { if (n === seq.buy) setText(buyPrev, decodeRevert(e)); }
   }
   async function previewClose() {
-    const n = ++seq.close, i = selected(closeSel), size = parse(closeIn.value, 18);
+    const n = ++seq.close, i = selected(closeSel), size = parse(closeIn.value, 18), k = pool, acct = account;
     if (i === null || !size) return setText(closePrev, '');
-    const pos = user()?.positions[pool][i] ?? 0n;
+    const pos = user()?.positions[k][i] ?? 0n;
     if (size > pos) return setText(closePrev, `size exceeds position (${wad(pos, 2)})`);
+    const id = ALL_SERIES[i]!.id[k];
     try {
-      const [proceeds, sigma] = await client.readContract({ ...poolCall(), functionName: 'quoteClose', args: [ALL_SERIES[i]!.id[pool], size] });
-      if (n === seq.close) setText(closePrev, `proceeds ${usdg6(proceeds)} USDG (min ${usdg6(minProceeds(proceeds))}) · σ_close ${wad(sigma, 3)}`);
+      const [[proceeds, sigma], exec] = await Promise.all([
+        client.readContract({ ...poolCallOf(k), functionName: 'quoteClose', args: [id, size] }),
+        acct ? executedClose(k, id, size, acct).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (n !== seq.close) return;
+      setText(closePrev, `proceeds ${usdg6(proceeds)} USDG (indicative) · σ_close ${wad(sigma, 3)}`
+        + (exec === null ? '' : ` · executed ≈ ${usdg6(exec)} USDG (min ${usdg6(minProceeds(exec))})`));
     } catch (e) { if (n === seq.close) setText(closePrev, decodeRevert(e)); }
   }
   function previewClaim() {
@@ -256,10 +272,12 @@ export function createTrade(): TradePanel {
     if (i === null || !size) return setText(buyPrev, 'pick a series and a size');
     const ref = ALL_SERIES[i]!, what = `buy ${wad(size, size < MIN_SIZE ? 4 : 2)} ${seriesLabel(ref)} on ${k}`;
     if (size < MIN_SIZE) return logLine(false, what, 'Minimum size is 0.01 units.');
-    // Quote segar tepat sebelum tulis: maxPremium = (premi + fee) × 1,01 dari blok terbaru, bukan dari pratinjau yang mungkin sudah tua.
-    void run(what, acct, k, async (kk) => {
+    // Batas dari JALUR EKSEKUSI tepat sebelum tulis: premi = simulasi `buy(id, size, MAX_UINT)` (post-poke, round Chainlink terbaru), fee diskalakan
+    // dari rasio kuotasi view; maxPremium = (premi + fee) × 1,01. Kuotasi view saja bisa gagal SlippageExceeded bila engine lama tidak di-poke (I-1).
+    void run(what, acct, k, async (kk, a) => {
       const q = await client.readContract({ ...poolCallOf(kk), functionName: 'quoteBuy', args: [ref.id[kk], size] });
-      return buyCall(kk, ref.id[kk], size, q.premiumAssets, q.feeAssets);
+      const premExec = await executedBuy(kk, ref.id[kk], size, a);
+      return buyCall(kk, ref.id[kk], size, premExec, scaleFee(q.feeAssets, q.premiumAssets, premExec));
     });
   });
   closeBtn.addEventListener('click', () => {
@@ -269,10 +287,8 @@ export function createTrade(): TradePanel {
     const ref = ALL_SERIES[i]!, what = `close ${wad(size, 2)} ${seriesLabel(ref)} on ${k}`;
     const pos = user()?.positions[k][i] ?? 0n;
     if (size > pos) return logLine(false, what, `size exceeds your position (${wad(pos, 2)} units)`);
-    void run(what, acct, k, async (kk) => {
-      const [proceeds] = await client.readContract({ ...poolCallOf(kk), functionName: 'quoteClose', args: [ref.id[kk], size] });
-      return closeCall(kk, ref.id[kk], size, proceeds);
-    });
+    // minProceeds = proceeds eksekusi (simulasi `close(id, size, 0)`, post-poke) × 0,99 — bukan dari `quoteClose` (I-1).
+    void run(what, acct, k, async (kk, a) => closeCall(kk, ref.id[kk], size, await executedClose(kk, ref.id[kk], size, a)));
   });
   claimBtn.addEventListener('click', () => {
     const k = pool, acct = account; if (!acct) return;
