@@ -1,4 +1,5 @@
 import './styles.css';
+import type { Address } from 'viem';
 import { client } from './chain/client';
 import { DEPLOYED_AT_BLOCK } from './deployment';
 import { readSnapshot, type Snapshot } from './chain/snapshot';
@@ -11,17 +12,21 @@ import { createHeader } from './panels/header';
 import { createNav } from './panels/nav';
 import { createBoard } from './panels/board';
 import { createActivity } from './panels/activity';
+import { createTrade } from './panels/trade';
 import { createFooter } from './panels/footer';
 import type { Meta, Panel } from './panels/types';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const banner = el('div', { class: 'banner hidden', role: 'status' });
 const board = createBoard();
+const trade = createTrade();
 const activity = createActivity();
-const panels: Panel[] = [createHeader(), createNav(), board, activity, createFooter()];
+const panels: Panel[] = [createHeader(), createNav(), board, trade, activity, createFooter()];
 mount(app, banner, ...panels.map((p) => p.root));
 
 let snapshot: Snapshot | null = null;
+/** Akun wallet yang terhubung (null = tanpa wallet); snapshot dibaca dengan akun ini agar `s.user` terisi. */
+let account: Address | null = null;
 const meta: Meta = { nowMs: Date.now(), lastOkMs: null, error: null };
 function paint() {
   meta.nowMs = Date.now();
@@ -44,8 +49,8 @@ try {
   const seed = await loadSeed();
   if (seed) { events = { trades: seed.trades, observed: seed.observed }; lastEventsBlock = seed.lastBlock; activity.setEvents(events); }
 } catch (e) { console.warn('seed:', e); }
-startPolling(async () => {
-  const s = await readSnapshot(client);
+async function refresh() {
+  const s = await readSnapshot(client, account ?? undefined);
   snapshot = s; meta.lastOkMs = Date.now(); meta.error = null; paint();
   // Paritas K5 dan estimasi gas menyusul setelah snapshot; kegagalannya tidak menggagalkan refresh.
   try { board.setParity(await readParity(client, s)); } catch (e) { console.warn('parity:', e); }
@@ -59,4 +64,13 @@ startPolling(async () => {
       activity.setEvents(events);
     } catch (e) { console.warn('events:', e); }
   }
-}, (e) => { meta.error = e instanceof Error ? e.message : String(e); paint(); });
+}
+const onError = (e: unknown) => { meta.error = e instanceof Error ? e.message : String(e); paint(); };
+// Satu refresh pada satu waktu: poll dan refreshNow berbagi promise yang sedang berjalan.
+let running: Promise<void> | null = null;
+const refreshOnce = () => running ?? (running = refresh().finally(() => { running = null; }));
+/** Refresh segera (connect / setelah aksi): bila ada yang sedang berjalan, jalankan lagi sesudahnya agar akun & saldo terbaru terbaca. */
+function refreshNow() { (running ? running.then(refreshOnce, refreshOnce) : refreshOnce()).catch(onError); }
+trade.onConnected = (a) => { account = a; refreshNow(); };
+trade.onChange = refreshNow;
+startPolling(refreshOnce, onError);

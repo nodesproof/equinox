@@ -5,6 +5,7 @@ import { readParity } from '../src/chain/parity';
 import { readSnapshot } from '../src/chain/snapshot';
 import { readGas } from '../src/chain/gas';
 import { readEvents } from '../src/chain/events';
+import { ALL_SERIES, POOL_KEYS } from '../src/deployment';
 const enabled = process.env.EQUINOX_NETWORK_TESTS === '1';
 describe.skipIf(!enabled)('live Sepolia', () => {
   it('math parity holds on every live series; quotes are per-pool consistent; gas estimates exist', async () => {
@@ -32,4 +33,30 @@ describe.skipIf(!enabled)('live Sepolia', () => {
     console.log(JSON.stringify({ toBlock: bn.toString(), trades: trades.length, observed: observed.length, perPool: { A: trades.filter((t) => t.pool === 'A').length, B: trades.filter((t) => t.pool === 'B').length },
       firstThree: trades.slice(0, 3), lastObserved: observed[observed.length - 1] }, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 1));
   }, 90_000);
+  // Jalur akun (Task 2, sebelumnya tak teruji): snapshot dengan akun owner — dibaca dari snapshot (`pools.A.owner`), bukan hard-coded.
+  // Keadaan rantai 20 Sep: seed LP 1e12 share per pool; posisi demo 5 C 2800 #0 (idx 4) dan 1 P 2400 #0 (idx 1) di kedua pool; allowance MAX.
+  // Smoke test (board 1, 0,01 unit, redeem share yang sama) mengembalikan share dan posisi ke nilai ini.
+  it('user path: readSnapshot(client, owner) fills shares, positions and allowance on both pools', async () => {
+    const s0 = await readSnapshot(client);
+    const owner = s0.pools.A.owner;
+    expect(s0.pools.B.owner).toBe(owner);
+    expect(s0.user).toBeNull();
+    const s = await readSnapshot(client, owner);
+    const u = s.user!;
+    expect(u).not.toBeNull();
+    expect(u.address).toBe(owner);
+    expect(u.shares.A).toBe(1_000_000_000_000n);
+    expect(u.shares.B).toBe(1_000_000_000_000n);
+    expect(ALL_SERIES[4]).toMatchObject({ boardId: 0, strike: 2800, isCall: true });
+    expect(ALL_SERIES[1]).toMatchObject({ boardId: 0, strike: 2400, isCall: false });
+    for (const k of POOL_KEYS) {
+      expect(u.positions[k]).toHaveLength(ALL_SERIES.length);
+      expect(u.positions[k][4], `${k} C 2800 #0`).toBe(5n * 10n ** 18n);
+      expect(u.positions[k][1], `${k} P 2400 #0`).toBe(10n ** 18n);
+      expect(u.allowance[k] > 0n, `${k} allowance`).toBe(true);
+    }
+    expect(u.usdg > 0n).toBe(true);
+    console.log(JSON.stringify({ block: s.blockNumber.toString(), owner, usdg: u.usdg.toString(), shares: u.shares, allowance: u.allowance,
+      positions: { A: u.positions.A.map(String), B: u.positions.B.map(String) } }, (_, v) => (typeof v === 'bigint' ? v.toString() : v)));
+  }, 60_000);
 });

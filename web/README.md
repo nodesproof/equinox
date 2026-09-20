@@ -1,6 +1,6 @@
 # Equinox dashboard
 
-Live, read-mostly view of the two Equinox option pools on Arbitrum Sepolia — Pool A (Solidity control, `BlackScholesSol`) and Pool B (Stylus program, cached) — sharing one Chainlink-derived volatility engine. The page reads every address from `../deployments/arbitrum-sepolia.json` (aliased as `@deployment`), polls the public RPC with viem, and shows block/quote/NAV state, K5 math parity per series, gas estimates A vs B, an activity feed built from pool events (`Bought`/`Closed`/`Settled`/`Claimed` on both pools) with a σ_base chart from the engine's `Observed` events, plus contract links. No framework: Vite 6 + TypeScript 5 + viem 2.
+Live view of the two Equinox option pools on Arbitrum Sepolia — Pool A (Solidity control, `BlackScholesSol`) and Pool B (Stylus program, cached) — sharing one Chainlink-derived volatility engine. The page reads every address from `../deployments/arbitrum-sepolia.json` (aliased as `@deployment`), polls the public RPC with viem, and shows block/quote/NAV state, K5 math parity per series, gas estimates A vs B, an activity feed built from pool events (`Bought`/`Closed`/`Settled`/`Claimed` on both pools) with a σ_base chart from the engine's `Observed` events, plus contract links. With an injected wallet (MetaMask) the Trade panel lets you mint mock USDG, approve, deposit/redeem LP shares, buy/close options and claim after settlement. No framework: Vite 6 + TypeScript 5 + viem 2.
 
 Published at <https://nodesproof.github.io/equinox/> (GitHub Pages, `base: /equinox/`).
 
@@ -20,16 +20,23 @@ Query parameters:
 
 Events are read with `eth_getLogs` in 50,000-block windows. `npm run seed` scans everything since the pools' deploy block once and writes `public/events-seed.json` (served at `/equinox/events-seed.json`; git-ignored, regenerated at every build); the page loads that seed first and then only reads the delta from the seed's `lastBlock + 1` — on the first successful snapshot and every 4th refresh. Without a seed (404, or the seed step failed) the page falls back to the full scan from the deploy block. The public RPC answers a 50k window in well under a second but rate-limits (HTTP 429) much wider ranges, which is why the cold scan is done at build time.
 
+## Trade panel (wallet)
+
+`src/chain/trade.ts` builds every write call (`buy`, `close`, `claim`, `deposit`, `redeem`, `approve`, faucet `mint`) as a plain `{ address, abi, functionName, args }` — pure, no DOM, no client — and is the single source of calldata for both the panel and the smoke test. `src/chain/wallet.ts` wraps the injected provider: `connect()` (requestAddresses + switch/add Arbitrum Sepolia), `write(call, account)` = `simulateContract` on the public RPC (so a revert is decoded before the wallet opens) → `writeContract` through the wallet → `waitForTransactionReceipt` (status must be `success`), and `decodeRevert(e)` maps custom error names (`UtilizationExceeded`, `SeriesExpired`, …) to human messages. Slippage is 1 % (`maxPremiumAssets = (premium + fee) × 1.01`, `minProceedsAssets = proceeds × 0.99`) computed from a fresh `quoteBuy`/`quoteClose` right before the write. The panel listens to `accountsChanged`/`chainChanged`; after connect or any action `main.ts` re-reads the snapshot with the account so balances, allowance, LP shares and positions refresh at once. Without a wallet the panel is read-only (previews still work) and links to a Sepolia ETH faucet.
+
 ## Checks
 
 ```sh
 npm run typecheck          # tsc --noEmit
 npm test                   # unit tests (manifest shape, series-id derivation, ABI surface, formatting, ATM pick, event chunking/labels/merge)
-npm run test:network       # parity + event-read tests against Arbitrum Sepolia (needs network; EQUINOX_NETWORK_TESTS=1)
+npm run test:network       # parity + event-read + user-path (snapshot with the owner account) tests against Arbitrum Sepolia (needs network; EQUINOX_NETWORK_TESTS=1)
+npm run smoke              # REAL transactions from SEPOLIA_PRIVATE_KEY on Pool B, board 1, 0.01 units (EQUINOX_SMOKE=1): faucet → approve if needed → deposit → buy → close → redeem
 npm run abi                # regenerate src/abi/*.ts from ../contracts/out (run `forge build` in contracts/ first)
 ```
 
 CI regenerates the ABIs from the Foundry artifacts and fails on drift, so commit `src/abi/*` whenever a contract interface changes.
+
+The smoke test is the headless proof of the write path with the exact calldata the UI builds. Run it deliberately, once, from `web/` with the key loaded only into that shell: `set -a; source ../.env; set +a; npm run smoke`. Each step is `simulateContract` → `estimateContractGas × 1.5` (Nitro's estimate has no margin and rises when a new Chainlink round lands before inclusion) → `writeContract` → receipt `success`; it prints the Arbiscan link and gas per transaction and asserts the series balance is back to 0 and the LP shares to their pre-deposit value. Never board 0 (the settlement demo).
 
 ## Build
 

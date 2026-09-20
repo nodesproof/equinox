@@ -16,6 +16,7 @@ tr.atm td{background:#172238}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{co
 form.trade{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}label{display:flex;flex-direction:column;gap:4px;font-size:.9em;color:var(--muted)}
 input,select,button{font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:#0e1628;color:var(--fg)}button{cursor:pointer;background:#1b2a48}button.primary{background:var(--gold);color:#111;font-weight:600}button:disabled{opacity:.5;cursor:default}
 .txlog{font-family:var(--mono);font-size:.8em;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}.txlog a{color:var(--gold)}
+.row{display:flex;gap:6px}.row input{flex:1;min-width:0}form.trade label>span.mono{min-height:1.2em;color:var(--fg)}.who{color:var(--gold);text-decoration:none}
 .site-footer{padding:16px 0 32px;color:var(--muted)}.addr-list{list-style:none;padding:0;margin:0 0 12px;display:grid;gap:4px}.addr-list a{color:var(--fg);text-decoration:none;word-break:break-all}
 svg.chart{width:100%;height:160px;background:#0e1628;border-radius:8px}
 svg.chart .chart-line{fill:none;stroke:var(--gold);stroke-width:1.5;vector-effect:non-scaling-stroke}svg.chart .chart-grid{stroke:var(--line);stroke-dasharray:3 3}svg.chart .chart-dot{fill:var(--gold)}

@@ -1,0 +1,272 @@
+// panels/trade.ts — panel Trade: connect wallet, faucet, approve, deposit/redeem, buy/close/claim; setiap aksi simulate → write → log.
+import { parseUnits, type Address } from 'viem';
+import { el, setText } from '../ui/dom';
+import { shortAddr, shortHash, usdg, usdg6, wad } from '../ui/format';
+import { ALL_SERIES, POOLS, POOL_KEYS, explorerAddress, explorerTx, type PoolKey } from '../deployment';
+import { chain, client } from '../chain/client';
+import { equinoxPoolAbi } from '../abi/equinoxPool';
+import { connect, decodeRevert, ensureChain, hasWallet, onWalletEvents, write } from '../chain/wallet';
+import {
+  ALLOWANCE_MIN, FAUCET_AMOUNT, MIN_SIZE, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds, redeemCall, seriesLabel,
+  type TradeCall,
+} from '../chain/trade';
+import type { Panel } from './types';
+import type { Snapshot } from '../chain/snapshot';
+
+export interface TradePanel extends Panel {
+  /** Dipanggil setelah connect/accountsChanged (null = wallet terputus); main.ts menyimpan akun dan me-refresh snapshot. */
+  onConnected: (a: Address | null) => void;
+  /** Dipanggil setelah setiap aksi selesai (berhasil atau gagal) agar snapshot dengan akun dibaca ulang segera. */
+  onChange: () => void;
+}
+export const ETH_FAUCET = 'https://faucet.quicknode.com/arbitrum/sepolia';
+const MAX_LOG = 50;
+const DEBOUNCE_MS = 250;
+
+/** Parse desimal pengguna → bigint dengan `decimals`; null bila kosong/invalid/≤ 0. */
+function parse(v: string, decimals: number): bigint | null {
+  const t = v.trim();
+  if (t === '') return null;
+  try { const x = parseUnits(t, decimals); return x > 0n ? x : null; } catch { return null; }
+}
+const opt = (value: string, text: string, selected = false) => { const o = el('option', { value, text }); o.selected = selected; return o; };
+
+export function createTrade(): TradePanel {
+  let account: Address | null = null;
+  let wrongChain = false;
+  let pool: PoolKey = 'B';
+  let last: Snapshot | null = null;
+  let busy = false;
+  const hooks = { onConnected: (_a: Address | null) => {}, onChange: () => {} };
+
+  // --- wallet ---
+  const connectBtn = el('button', { type: 'button', class: 'primary', text: 'Connect wallet' });
+  const who = el('a', { class: 'who mono', target: '_blank', rel: 'noopener', text: '' });
+  const summary = el('dl', { class: 'kv' });
+  const noWallet = el('p', { class: 'muted small' },
+    'No injected wallet found — the panel is read-only. Install MetaMask, add Arbitrum Sepolia (chain 421614) and fund it with Sepolia ETH from the ',
+    el('a', { href: ETH_FAUCET, target: '_blank', rel: 'noopener', text: 'QuickNode faucet ↗' }),
+    ', then reload. USDG is a mock token minted from the faucet button below (no real value).');
+  const gasNote = el('p', { class: 'muted small' }, 'Gas is Sepolia ETH (', el('a', { href: ETH_FAUCET, target: '_blank', rel: 'noopener', text: 'faucet ↗' }),
+    '); every action is simulated first (eth_call) so a revert is decoded here before the wallet opens. Slippage 1 % on buy (max premium + fee) and close (min proceeds).');
+
+  // --- form ---
+  const radios = POOL_KEYS.map((k) => el('input', { type: 'radio', name: 'pool', value: k, checked: k === pool }));
+  const poolLabel = el('span', { class: 'muted small', text: POOLS[pool].label });
+  const faucetBtn = el('button', { type: 'button', text: `Faucet ${usdg(FAUCET_AMOUNT, 0)} USDG` });
+  const approveBtn = el('button', { type: 'button', text: 'Approve USDG' });
+  const approveBox = el('label', { class: 'hidden' }, 'Allowance', el('span', { class: 'muted small', text: 'USDG allowance for this pool is below 1,000,000 — approve once (MAX).' }), approveBtn);
+  const depositIn = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'USDG, e.g. 100' });
+  const depositPrev = el('span', { class: 'mono small', text: '' });
+  const depositBtn = el('button', { type: 'button', class: 'primary', text: 'Deposit' });
+  const redeemIn = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'shares, e.g. 100' });
+  const redeemMax = el('button', { type: 'button', text: 'max' });
+  const redeemPrev = el('span', { class: 'mono small', text: '' });
+  const redeemBtn = el('button', { type: 'button', class: 'primary', text: 'Redeem' });
+  const buySel = el('select');
+  const buyIn = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'units, e.g. 0.1', value: '0.1' });
+  const buyPrev = el('span', { class: 'mono small', text: '' });
+  const buyBtn = el('button', { type: 'button', class: 'primary', text: 'Buy' });
+  const closeSel = el('select');
+  const closeIn = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'units ≤ position' });
+  const closePrev = el('span', { class: 'mono small', text: '' });
+  const closeBtn = el('button', { type: 'button', class: 'primary', text: 'Close' });
+  const claimSel = el('select');
+  const claimPrev = el('span', { class: 'mono small', text: '' });
+  const claimBtn = el('button', { type: 'button', class: 'primary', text: 'Claim' });
+  const log = el('div', { class: 'txlog' }, el('span', { class: 'muted', text: 'No transactions yet.' }));
+  const form = el('form', { class: 'trade' },
+    el('label', {}, 'Pool', el('span', {}, ...radios.flatMap((r, i) => [r, ` ${POOL_KEYS[i]} `])), poolLabel),
+    el('label', {}, 'Faucet (MockUSDG, open mint)', faucetBtn),
+    approveBox,
+    el('label', {}, 'Deposit (USDG → LP shares)', depositIn, depositPrev, depositBtn),
+    el('label', {}, 'Redeem (shares → USDG)', el('span', { class: 'row' }, redeemIn, redeemMax), redeemPrev, redeemBtn),
+    el('label', {}, 'Buy (open series)', buySel, buyIn, buyPrev, buyBtn),
+    el('label', {}, 'Close (your positions)', closeSel, closeIn, closePrev, closeBtn),
+    el('label', {}, 'Claim (settled series)', claimSel, claimPrev, claimBtn),
+  );
+  form.addEventListener('submit', (e) => e.preventDefault());
+  const root = el('section', {}, el('h2', { text: 'Trade — from your wallet (Arbitrum Sepolia)' }),
+    el('div', { class: 'header-right' }, connectBtn, who), summary, hasWallet() ? gasNote : noWallet, form, log);
+
+  // --- helpers ---
+  const poolCall = () => ({ address: POOLS[pool].pool, abi: equinoxPoolAbi } as const);
+  const user = () => (last && account && last.user && last.user.address.toLowerCase() === account.toLowerCase() ? last.user : null);
+  const openRows = () => (last ? last.series.map((r, i) => ({ r, i })).filter(({ r }) => !r[pool].settled && r.ref.expiry > last!.blockTime + 60) : []);
+  const heldRows = (settled: boolean) => {
+    const u = user(); if (!last || !u) return [];
+    return last.series.map((r, i) => ({ r, i, pos: u.positions[pool][i] ?? 0n })).filter(({ r, pos }) => pos > 0n && r[pool].settled === settled);
+  };
+  // Opsi placeholder bernilai '' (Number('') === 0 — jangan sampai terbaca sebagai seri indeks 0).
+  const selected = (sel: HTMLSelectElement) => { if (sel.value === '') return null; const i = Number(sel.value); return Number.isInteger(i) && ALL_SERIES[i] ? i : null; };
+  function fill(sel: HTMLSelectElement, rows: { i: number; text: string }[], empty: string) {
+    // Bangun ulang hanya bila daftar opsi berubah (snapshot tiap 15 s; replaceChildren menutup dropdown yang sedang dibuka).
+    const next = rows.length ? rows.map(({ i, text }) => `${i}|${text}`) : [`|${empty}`];
+    const cur = Array.from(sel.options, (o) => `${o.value}|${o.text}`);
+    if (next.length === cur.length && next.every((x, j) => x === cur[j])) return;
+    const prev = sel.value;
+    sel.replaceChildren(...(rows.length ? rows.map(({ i, text }) => opt(String(i), text, String(i) === prev)) : [opt('', empty)]));
+    if (rows.length && !rows.some(({ i }) => String(i) === prev)) sel.selectedIndex = 0;
+  }
+  function logLine(ok: boolean, what: string, tail: string, hash?: `0x${string}`) {
+    if (log.firstElementChild?.classList.contains('muted')) log.replaceChildren();
+    const line = el('div', { class: ok ? 'ok' : 'bad' }, `${ok ? '✓' : '✗'} ${what} — `,
+      hash ? el('a', { href: explorerTx(hash), target: '_blank', rel: 'noopener', text: `tx ${shortHash(hash)} ↗` }) : el('span', { class: 'muted', text: tail }));
+    log.prepend(line);
+    while (log.childElementCount > MAX_LOG) log.lastElementChild?.remove();
+  }
+  /** Satu aksi: bangun call (boleh membaca quote segar) → write (simulate → wallet → receipt) → log → onChange. */
+  async function run(what: string, build: () => Promise<TradeCall> | TradeCall) {
+    if (!account || busy) return;
+    busy = true; paintEnabled();
+    try { const hash = await write(await build(), account); logLine(true, what, '', hash); }
+    catch (e) { logLine(false, what, decodeRevert(e)); }
+    finally { busy = false; paintEnabled(); hooks.onChange(); }
+  }
+
+  // --- pratinjau (debounce + penjaga urutan agar balasan lama tidak menimpa yang baru) ---
+  const seq = { deposit: 0, redeem: 0, buy: 0, close: 0 };
+  const timers: Partial<Record<keyof typeof seq, ReturnType<typeof setTimeout>>> = {};
+  const debounce = (k: keyof typeof seq, fn: () => void) => { clearTimeout(timers[k]); timers[k] = setTimeout(fn, DEBOUNCE_MS); };
+  async function previewDeposit() {
+    const n = ++seq.deposit, assets = parse(depositIn.value, 6);
+    if (!assets) return setText(depositPrev, '');
+    try { const sh = await client.readContract({ ...poolCall(), functionName: 'previewDeposit', args: [assets] }); if (n === seq.deposit) setText(depositPrev, `→ ${usdg6(sh)} shares`); }
+    catch (e) { if (n === seq.deposit) setText(depositPrev, decodeRevert(e)); }
+  }
+  async function previewRedeem() {
+    const n = ++seq.redeem, shares = parse(redeemIn.value, 6);
+    if (!shares) return setText(redeemPrev, '');
+    try { const a = await client.readContract({ ...poolCall(), functionName: 'previewRedeem', args: [shares] }); if (n === seq.redeem) setText(redeemPrev, `→ ${usdg6(a)} USDG`); }
+    catch (e) { if (n === seq.redeem) setText(redeemPrev, decodeRevert(e)); }
+  }
+  async function previewBuy() {
+    const n = ++seq.buy, i = selected(buySel), size = parse(buyIn.value, 18);
+    if (i === null || !size) return setText(buyPrev, '');
+    if (size < MIN_SIZE) return setText(buyPrev, 'minimum size is 0.01 units');
+    try {
+      const q = await client.readContract({ ...poolCall(), functionName: 'quoteBuy', args: [ALL_SERIES[i]!.id[pool], size] });
+      if (n === seq.buy) setText(buyPrev, `premium ${usdg6(q.premiumAssets)} + fee ${usdg6(q.feeAssets)} = ${usdg6(q.premiumAssets + q.feeAssets)} USDG (max ${usdg6(maxPremium(q.premiumAssets, q.feeAssets))}) · σ ${wad(q.sigma, 3)} · Δ ${wad(q.delta, 2)}`);
+    } catch (e) { if (n === seq.buy) setText(buyPrev, decodeRevert(e)); }
+  }
+  async function previewClose() {
+    const n = ++seq.close, i = selected(closeSel), size = parse(closeIn.value, 18);
+    if (i === null || !size) return setText(closePrev, '');
+    const pos = user()?.positions[pool][i] ?? 0n;
+    if (size > pos) return setText(closePrev, `size exceeds position (${wad(pos, 2)})`);
+    try {
+      const [proceeds, sigma] = await client.readContract({ ...poolCall(), functionName: 'quoteClose', args: [ALL_SERIES[i]!.id[pool], size] });
+      if (n === seq.close) setText(closePrev, `proceeds ${usdg6(proceeds)} USDG (min ${usdg6(minProceeds(proceeds))}) · σ_close ${wad(sigma, 3)}`);
+    } catch (e) { if (n === seq.close) setText(closePrev, decodeRevert(e)); }
+  }
+  function previewClaim() {
+    const i = selected(claimSel), u = user();
+    if (i === null || !u || !last) return setText(claimPrev, '');
+    const pos = u.positions[pool][i] ?? 0n, ppu = last.series[i]![pool].payoutPerUnit;
+    // payoutPerUnit WAD per unit × posisi WAD → aset 6 dp: ÷ 1e18 (unit) ÷ 1e12 (assetScale).
+    setText(claimPrev, `${wad(pos, 2)} units × ${usdg6(ppu / 10n ** 12n)} = ${usdg6((pos * ppu) / 10n ** 18n / 10n ** 12n)} USDG`);
+  }
+  const previews = () => { void previewDeposit(); void previewRedeem(); void previewBuy(); void previewClose(); previewClaim(); };
+
+  // --- render ---
+  function paintSnapshot() {
+    const u = user();
+    fill(buySel, openRows().map(({ r, i }) => ({ i, text: seriesLabel(r.ref) })), 'no open series');
+    fill(closeSel, heldRows(false).map(({ r, i, pos }) => ({ i, text: `${seriesLabel(r.ref)} — ${wad(pos, 2)} units` })), account ? 'no open positions' : 'connect wallet to see positions');
+    fill(claimSel, heldRows(true).map(({ r, i, pos }) => ({ i, text: `${seriesLabel(r.ref)} — ${wad(pos, 2)} units` })), account ? 'nothing to claim' : 'connect wallet to see positions');
+    approveBox.classList.toggle('hidden', !u || u.allowance[pool] >= ALLOWANCE_MIN);
+    setText(approveBtn, `Approve USDG for pool ${pool}`);
+    setText(poolLabel, POOLS[pool].label);
+    if (!account) { summary.replaceChildren(); return; }
+    const positions = (k: PoolKey) => { const xs = u ? ALL_SERIES.flatMap((s, i) => ((u.positions[k][i] ?? 0n) > 0n ? [`${wad(u.positions[k][i]!, 2)} ${seriesLabel(s)}`] : [])) : []; return xs.length ? xs.join(', ') : '—'; };
+    const rows: [string, string][] = u
+      ? [['USDG', `${usdg(u.usdg)} USDG`], ['LP shares A | B', `${usdg6(u.shares.A)} | ${usdg6(u.shares.B)}`],
+        ['USDG allowance A | B', POOL_KEYS.map((k) => (u.allowance[k] >= ALLOWANCE_MIN ? 'approved' : 'not approved')).join(' | ')],
+        ['Positions A', positions('A')], ['Positions B', positions('B')]]
+      : [['Account', wrongChain ? 'wrong network — switch to Arbitrum Sepolia' : 'loading…']];
+    summary.replaceChildren(...rows.flatMap(([a, b]) => [el('dt', { text: a }), el('dd', { text: b })]));
+  }
+  function paintEnabled() {
+    const can = hasWallet() && account !== null && !wrongChain && !busy;
+    for (const b of [faucetBtn, approveBtn, depositBtn, redeemBtn, buyBtn, closeBtn, claimBtn]) b.disabled = !can;
+    redeemMax.disabled = !user();
+    connectBtn.classList.toggle('hidden', !hasWallet() || (account !== null && !wrongChain));
+    setText(connectBtn, wrongChain ? 'Switch to Arbitrum Sepolia' : 'Connect wallet');
+    connectBtn.disabled = busy;
+    who.classList.toggle('hidden', !account);
+    if (account) { setText(who, `${shortAddr(account)}${wrongChain ? ' (wrong network)' : ''}`); who.setAttribute('href', explorerAddress(account)); }
+  }
+  function render(s: Snapshot | null) {
+    if (s !== last) { last = s; paintSnapshot(); previews(); }
+    paintEnabled();
+  }
+  const setAccount = (a: Address | null) => { if (a === account) return; account = a; paintSnapshot(); paintEnabled(); hooks.onConnected(a); };
+
+  // --- events ---
+  connectBtn.addEventListener('click', async () => {
+    busy = true; paintEnabled();
+    try {
+      // Sudah connect tapi salah jaringan → cukup pindah chain; selain itu requestAddresses + ensureChain.
+      const a = wrongChain && account ? (await ensureChain(), account) : await connect();
+      wrongChain = false; busy = false;
+      if (a !== account) setAccount(a); else { paintSnapshot(); hooks.onChange(); }
+    } catch (e) { busy = false; logLine(false, 'connect', decodeRevert(e)); }
+    finally { busy = false; paintEnabled(); }
+  });
+  onWalletEvents({
+    accounts: (a) => setAccount(a[0] ?? null),
+    chain: (id) => { wrongChain = id !== chain.id; paintSnapshot(); paintEnabled(); if (!wrongChain) hooks.onChange(); },
+  });
+  radios.forEach((r) => r.addEventListener('change', () => { if (r.checked) { pool = r.value as PoolKey; paintSnapshot(); previews(); } }));
+  depositIn.addEventListener('input', () => debounce('deposit', () => void previewDeposit()));
+  redeemIn.addEventListener('input', () => debounce('redeem', () => void previewRedeem()));
+  redeemMax.addEventListener('click', () => { const u = user(); if (u) { redeemIn.value = usdg6(u.shares[pool]); void previewRedeem(); } });
+  buySel.addEventListener('change', () => void previewBuy());
+  buyIn.addEventListener('input', () => debounce('buy', () => void previewBuy()));
+  closeSel.addEventListener('change', () => void previewClose());
+  closeIn.addEventListener('input', () => debounce('close', () => void previewClose()));
+  claimSel.addEventListener('change', previewClaim);
+
+  faucetBtn.addEventListener('click', () => void run(`faucet ${usdg(FAUCET_AMOUNT, 0)} USDG`, () => faucetCall(account!)));
+  approveBtn.addEventListener('click', () => void run(`approve USDG for ${pool}`, () => approveCall(pool)));
+  depositBtn.addEventListener('click', () => {
+    const assets = parse(depositIn.value, 6); if (!assets) return setText(depositPrev, 'enter a USDG amount');
+    void run(`deposit ${usdg(assets)} USDG into ${pool}`, () => depositCall(pool, assets, account!));
+  });
+  redeemBtn.addEventListener('click', () => {
+    const shares = parse(redeemIn.value, 6); if (!shares) return setText(redeemPrev, 'enter a share amount');
+    void run(`redeem ${usdg6(shares)} shares from ${pool}`, () => redeemCall(pool, shares, account!));
+  });
+  buyBtn.addEventListener('click', () => {
+    const i = selected(buySel), size = parse(buyIn.value, 18);
+    if (i === null || !size) return setText(buyPrev, 'pick a series and a size');
+    const ref = ALL_SERIES[i]!;
+    // Quote segar tepat sebelum tulis: maxPremium = (premi + fee) × 1,01 dari blok terbaru, bukan dari pratinjau yang mungkin sudah tua.
+    void run(`buy ${wad(size, 2)} ${seriesLabel(ref)} on ${pool}`, async () => {
+      const q = await client.readContract({ ...poolCall(), functionName: 'quoteBuy', args: [ref.id[pool], size] });
+      return buyCall(pool, ref.id[pool], size, q.premiumAssets, q.feeAssets);
+    });
+  });
+  closeBtn.addEventListener('click', () => {
+    const i = selected(closeSel), size = parse(closeIn.value, 18);
+    if (i === null || !size) return setText(closePrev, 'pick a position and a size');
+    const ref = ALL_SERIES[i]!;
+    void run(`close ${wad(size, 2)} ${seriesLabel(ref)} on ${pool}`, async () => {
+      const [proceeds] = await client.readContract({ ...poolCall(), functionName: 'quoteClose', args: [ref.id[pool], size] });
+      return closeCall(pool, ref.id[pool], size, proceeds);
+    });
+  });
+  claimBtn.addEventListener('click', () => {
+    const i = selected(claimSel), pos = i === null ? 0n : (user()?.positions[pool][i] ?? 0n);
+    if (i === null || pos === 0n) return setText(claimPrev, 'nothing to claim');
+    const ref = ALL_SERIES[i]!;
+    void run(`claim ${wad(pos, 2)} ${seriesLabel(ref)} on ${pool}`, () => claimCall(pool, ref.id[pool], pos));
+  });
+
+  paintSnapshot(); paintEnabled();
+  return {
+    root, render,
+    get onConnected() { return hooks.onConnected; }, set onConnected(f) { hooks.onConnected = f; },
+    get onChange() { return hooks.onChange; }, set onChange(f) { hooks.onChange = f; },
+  };
+}
