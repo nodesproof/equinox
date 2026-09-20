@@ -45,15 +45,24 @@ else
     if [ "$(cast call --rpc-url "$RPC" "$P" "board(uint256)(uint64,bool,uint256,uint256[])" "$BID" | sed -n 2p)" == "false" ]; then
       res=$(send "$P" "settle(uint256)" "$BID"); tx=${res%% *}; g=${res##* }; row "settle board $BID ($P)" "[$g gas]($(arbiscan "$tx"))" "—"; fi
   done
-  SP=$(cast call --rpc-url "$RPC" "$A" "board(uint256)(uint64,bool,uint256,uint256[])" "$BID" | sed -n 3p | awk '{print $1}'); printf 'Harga settlement: **%s USD** (round Chainlink pertama yang segar dengan `updatedAt ≥ expiry`).\n\n' "$(wad "$SP")" >> "$LOG"
+  # harga settlement dibaca per pool: A dan B settle di tx terpisah, masing-masing memakai round Chainlink saat panggilannya
+  SPA=$(cast call --rpc-url "$RPC" "$A" "board(uint256)(uint64,bool,uint256,uint256[])" "$BID" | sed -n 3p | awk '{print $1}'); SPB=$(cast call --rpc-url "$RPC" "$B" "board(uint256)(uint64,bool,uint256,uint256[])" "$BID" | sed -n 3p | awk '{print $1}')
+  row "harga settlement board $BID (round Chainlink pertama yang segar, updatedAt ≥ expiry)" "$(wad "$SPA") USD" "$(wad "$SPB") USD $([ "$SPA" == "$SPB" ] && echo '✓' || echo '(≠ — round settlement berbeda)')"
+  SSIG="series(uint256)(uint32,uint64,uint128,bool,bool,uint256,uint256,uint256)"   # baris 8 = payoutPerUnit (WAD)
   for pair in "C_$KHI:$C_A:$C_B" "P_$KLO:$P_A:$P_B"; do
     NAME=${pair%%:*}; r=${pair#*:}; SA_ID=${r%%:*}; SB_ID=${r#*:}
     BALA=$(num "$TOK_A" "balanceOf(address,uint256)(uint256)" "$ME" "$SA_ID"); BALB=$(num "$TOK_B" "balanceOf(address,uint256)(uint256)" "$ME" "$SB_ID")
-    [ "$BALA" != "0" ] || { row "claim $NAME" "tidak ada posisi" "tidak ada posisi"; continue; }
-    res=$(send "$A" "claim(uint256,uint256)" "$SA_ID" "$BALA"); txa=${res%% *}; ga=${res##* }
-    res=$(send "$B" "claim(uint256,uint256)" "$SB_ID" "$BALB"); txb=${res%% *}; gb=${res##* }
-    PAY=$(cast call --rpc-url "$RPC" "$A" "series(uint256)(uint32,uint64,uint128,bool,bool,uint256,uint256,uint256)" "$SA_ID" | sed -n 8p | awk '{print $1}')
-    row "claim $NAME ($(wad "$BALA") unit × payout $(wad "$PAY") USDG)" "[$ga gas]($(arbiscan "$txa"))" "[$gb gas]($(arbiscan "$txb"))"
+    [ "$BALA" != "0" ] || [ "$BALB" != "0" ] || { row "claim $NAME" "tidak ada posisi" "tidak ada posisi"; continue; }
+    CA="tidak ada posisi"; CB="tidak ada posisi"   # klaim per pool, hanya bila saldo pool itu > 0; payout/unit dibaca per pool
+    if [ "$BALA" != "0" ]; then
+      PAYA=$(cast call --rpc-url "$RPC" "$A" "$SSIG" "$SA_ID" | sed -n 8p | awk '{print $1}')
+      res=$(send "$A" "claim(uint256,uint256)" "$SA_ID" "$BALA"); txa=${res%% *}; ga=${res##* }; CA="$(wad "$BALA") unit × payout $(wad "$PAYA") USDG: [$ga gas]($(arbiscan "$txa"))"
+    fi
+    if [ "$BALB" != "0" ]; then
+      PAYB=$(cast call --rpc-url "$RPC" "$B" "$SSIG" "$SB_ID" | sed -n 8p | awk '{print $1}')
+      res=$(send "$B" "claim(uint256,uint256)" "$SB_ID" "$BALB"); txb=${res%% *}; gb=${res##* }; CB="$(wad "$BALB") unit × payout $(wad "$PAYB") USDG: [$gb gas]($(arbiscan "$txb"))"
+    fi
+    row "claim $NAME" "$CA" "$CB"
   done
 fi
 # --- keadaan akhir (blok yang sama untuk A dan B) ---
