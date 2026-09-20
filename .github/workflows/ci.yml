@@ -64,3 +64,15 @@ jobs:
         working-directory: web
       - run: npm run typecheck && npm test && npm run build
         working-directory: web
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: equinox-dashboard/package-lock.json }
+      - run: npm ci   # data layer: ../web/src di-alias sebagai @chain dan me-resolve viem dari web/node_modules
+        working-directory: web
+      - run: npm ci
+        working-directory: equinox-dashboard
+      - run: npm run check && npm test && npm run build   # build menjalankan scripts/size.mjs (batas 250 KB gzip JS)
+        working-directory: equinox-dashboard

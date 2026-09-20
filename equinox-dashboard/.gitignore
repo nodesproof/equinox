@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Seed event: dibangkitkan `npm run seed` (disalin dari ../web/public), bukan sumber.
+client/public/events-seed.json
+
+# Sisa runtime template Manus (log debug collector) — tidak pernah ikut repo.
+.manus-logs/
+client/public/__manus__/
+
+# Environment
+.env
+.env.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Cache
+*.tsbuildinfo
+.eslintcache
