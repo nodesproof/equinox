@@ -19,6 +19,8 @@ RPC="${SEPOLIA_RPC_URL:-$(jq -r .rpc "$DEP")}"
 SOURCIFY="${SOURCIFY_URL:-https://sourcify.dev/server}"
 FORGE_URL=(); [ -z "${SOURCIFY_URL:-}" ] || FORGE_URL=(--verifier-url "$SOURCIFY_URL")   # default forge = sourcify.dev
 CHAIN=$(jq -r .chainId "$DEP"); [ "$CHAIN" == "421614" ] || { echo "chainId $CHAIN bukan Arbitrum Sepolia (421614)"; exit 1; }
+# RPC harus benar-benar Arbitrum Sepolia (V1), bukan hanya manifest-nya — sebelum membaca alamat atau mengirim verifikasi apa pun
+[ "$(cast chain-id --rpc-url "$RPC")" == "421614" ] || { echo "RPC bukan Arbitrum Sepolia"; exit 1; }
 
 addr() { cast call --rpc-url "$RPC" "$1" "$2" | awk '{print tolower($1)}'; }
 lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
