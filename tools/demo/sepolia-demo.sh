@@ -6,6 +6,7 @@
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; source "$ROOT/tools/sepolia/lib.sh"
 MODE=${1:---trade}; BI=${2:-0}; LOG="$ROOT/docs/DEMO_LOG.md"
 A=$(jq -r .pools.A.pool "$DEP"); B=$(jq -r .pools.B.pool "$DEP"); USDG=$(jq -r .pools.usdg "$DEP"); VOL=$(jq -r .pools.vol "$DEP")
+SEQ=$(jq -r .pools.sequencerFeed "$DEP")
 TOK_A=$(jq -r .pools.A.token "$DEP"); TOK_B=$(jq -r .pools.B.token "$DEP")
 EXP=$(jq -r ".pools.boards[$BI].expiry" "$DEP"); KS=($(jq -r ".pools.boards[$BI].strikes[]" "$DEP")); BID=$(jq -r ".pools.boards[$BI].id" "$DEP")
 KLO=${KS[0]}; KHI=${KS[${#KS[@]}-1]}
@@ -41,6 +42,13 @@ if [ "$MODE" == "--trade" ]; then
   res=$(send "$B" "close(uint256,uint256,uint256)" "$C_B" 5000000000000000000 0); txb=${res%% *}; gb=${res##* }
   row "close 5 C $KHI" "[$ga gas]($(arbiscan "$txa"))" "[$gb gas]($(arbiscan "$txb"))  rasio $(python3 -c "print(f'{$ga/$gb:.2f}')")×"
 else
+  # sequencer mock: `MockSequencerFeed.set()` permissionless (artefak testnet) — bila ada yang menandai "down" atau memasang ulang
+  # grace 3600 s, settle revert SettlementNotReady/OracleStale; pulihkan dulu (predikat OracleLib.sequencerUp; keeper melakukan hal sama)
+  SQ=$(cast call --rpc-url "$RPC" "$SEQ" "latestRoundData()(uint80,int256,uint256,uint256,uint80)"); SQA=$(sed -n 2p <<< "$SQ" | awk '{print $1}'); SQS=$(sed -n 3p <<< "$SQ" | awk '{print $1}'); NOW=$(date -u +%s)
+  if [ "$SQA" != "0" ] || [ "$SQS" == "0" ] || [ $((NOW - SQS)) -lt 3600 ]; then
+    echo "!! sequencer mock: answer=$SQA startedAt=$SQS (umur $((NOW - SQS)) s) — pulihkan: set(0, $((NOW - 7200)))"
+    res=$(send "$SEQ" "set(int256,uint256)" 0 $((NOW - 7200))); row "sequencer mock dipulihkan: set(0, now − 7200)" "[${res##* } gas]($(arbiscan "${res%% *}"))" "—"
+  fi
   for P in "$A" "$B"; do
     if [ "$(cast call --rpc-url "$RPC" "$P" "board(uint256)(uint64,bool,uint256,uint256[])" "$BID" | sed -n 2p)" == "false" ]; then
       res=$(send "$P" "settle(uint256)" "$BID"); tx=${res%% *}; g=${res##* }; row "settle board $BID ($P)" "[$g gas]($(arbiscan "$tx"))" "—"; fi

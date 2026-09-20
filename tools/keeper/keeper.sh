@@ -10,7 +10,7 @@ DEP="${1:-$ROOT/deployments/arbitrum-sepolia.json}"
 PK="$KEEPER_PRIVATE_KEY"; RPC="${SEPOLIA_RPC_URL:-$(jq -r .rpc "$DEP")}"; DRY="${DRY_RUN:-0}"
 ME=$(cast wallet address --private-key "$PK")
 VOL=$(jq -r .pools.vol "$DEP"); A=$(jq -r .pools.A.pool "$DEP"); B=$(jq -r .pools.B.pool "$DEP")
-FEED=$(jq -r .pools.feed "$DEP"); STYLUS=$(jq -r .blackScholesStylus "$DEP")
+FEED=$(jq -r .pools.feed "$DEP"); SEQ=$(jq -r .pools.sequencerFeed "$DEP"); STYLUS=$(jq -r .blackScholesStylus "$DEP")
 num() { cast call --rpc-url "$RPC" "$1" "$2" "${@:3}" | awk '{print $1}'; }
 # kirim tx dari wallet keeper: estimasi dulu (revert → return 1, tidak ada tx), gas limit 1,5× estimasi (estimasi Nitro tanpa margin;
 # round Chainlink baru antara estimasi dan eksekusi menambah ≈ 25k gas lewat jalur EWMA penuh), receipt harus status 1.
@@ -52,6 +52,20 @@ health || echo "kesehatan: gagal dibaca — lanjut"
 if [ "$DRY" == "1" ]; then echo "poke (simulasi): $(cast call --rpc-url "$RPC" --from "$ME" "$VOL" "poke()(uint256)" | awk '{print $1}')"
 elif res=$(ksend "$VOL" "poke()"); then echo "poke: $res lastRoundId=$(num "$VOL" "lastRoundId()(uint80)")"
 else echo "poke GAGAL — lanjut ke settle"; fi
+# --- sequencer mock: `MockSequencerFeed.set()` permissionless (artefak testnet) — siapa pun bisa menandai "down" (answer 1) atau
+#     memasang ulang grace 3600 s, yang membuat settle revert SettlementNotReady/OracleStale dan memblokir kuotasi/deposit sampai
+#     di-reset. Predikat = OracleLib.sequencerUp: answer == 0, startedAt ∈ (0, now], now − startedAt ≥ grace; selain itu pulihkan. ---
+seq_heal() {
+  local SQ ANS ST res
+  SQ=$(cast call --rpc-url "$RPC" "$SEQ" "latestRoundData()(uint80,int256,uint256,uint256,uint80)") || return 1
+  ANS=$(echo "$SQ" | sed -n 2p | awk '{print $1}'); ST=$(echo "$SQ" | sed -n 3p | awk '{print $1}')
+  if [ "$ANS" == "0" ] && [ "$ST" != "0" ] && [ $((NOW - ST)) -ge 3600 ]; then echo "sequencer mock: up, startedAt $ST (umur $((NOW - ST)) s) — ok"; return 0; fi
+  echo "!! sequencer mock: answer=$ANS startedAt=$ST (umur $((NOW - ST)) s) — kuotasi/settle terblokir; pulihkan: set(0, $((NOW - 7200)))"
+  if [ "$DRY" == "1" ]; then echo "sequencer set (simulasi): $SEQ set(int256,uint256) 0 $((NOW - 7200))"
+  elif res=$(ksend "$SEQ" "set(int256,uint256)" 0 $((NOW - 7200))); then echo "sequencer set: $res"
+  else echo "sequencer set GAGAL — lanjut (settle akan revert SettlementNotReady/OracleStale)"; fi
+}
+seq_heal || echo "sequencer mock: gagal dibaca — lanjut"
 # --- settle board yang sudah expiry: pre-flight `cast call` (nama error bila belum bisa) → ksend; gagal → board/pool berikutnya ---
 BSIG="board(uint256)(uint64,bool,uint256,uint256[])"
 for P in "$A" "$B"; do
