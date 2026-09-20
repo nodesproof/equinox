@@ -84,17 +84,26 @@ describe('seriesLabel', () => {
 });
 
 describe('REVERT_TEXT', () => {
-  it('has 16 human messages keyed by custom error name (12 pool + 3 ERC-4626 + 1 ERC-1155 token error)', () => {
-    expect(Object.keys(REVERT_TEXT)).toHaveLength(16);
+  it('has 18 human messages keyed by custom error name (12 pool + 3 ERC-4626 + 1 ERC-1155 + 2 USDG Paxos token errors)', () => {
+    expect(Object.keys(REVERT_TEXT)).toHaveLength(18);
     for (const k of ['OracleStale', 'UtilizationExceeded', 'VegaCapExceeded', 'SlippageExceeded', 'SeriesExpired', 'SeriesSettled', 'SizeTooSmall', 'TradingIsPaused', 'MathUnavailable', 'NotSettled', 'ERC20InsufficientBalance', 'ERC20InsufficientAllowance',
-      'ERC4626ExceededMaxRedeem', 'ERC4626ExceededMaxWithdraw', 'ERC4626ExceededMaxDeposit', 'ERC1155InsufficientBalance']) {
+      'ERC4626ExceededMaxRedeem', 'ERC4626ExceededMaxWithdraw', 'ERC4626ExceededMaxDeposit', 'ERC1155InsufficientBalance', 'InsufficientFunds', 'InsufficientAllowance']) {
       expect(REVERT_TEXT[k], k).toBeTruthy();
     }
     // Saldo kurang: pesan menyebut kedua jalur aset (faucet tombol untuk A/B, faucet.paxos.com untuk C).
     expect(REVERT_TEXT.ERC20InsufficientBalance).toBe('Not enough USDG in your wallet for this pool — mock pools (A, B): use the faucet button; Pool C: get 100 USDG/day at faucet.paxos.com.');
+    // Error token USDG Paxos (Pool C): `InsufficientFunds()` (saldo) dan `InsufficientAllowance()` (belum approve) — bukan error OpenZeppelin.
+    expect(REVERT_TEXT.InsufficientFunds).toBe('Not enough USDG in your wallet for this pool — Pool C uses Paxos USDG (get 100/day at faucet.paxos.com).');
+    expect(REVERT_TEXT.InsufficientAllowance).toBe('Approve USDG (Paxos) for pool C first.');
   });
-  it('maps the ERC-1155 selector (not in the pool ABI) to the same text', () => {
+  it('maps the ERC-1155 and Paxos USDG selectors (not in the pool ABI) to the same texts', () => {
     expect(toFunctionSelector('ERC1155InsufficientBalance(address,uint256,uint256,uint256)')).toBe('0x03dee4c5');
     expect(REVERT_SELECTOR['0x03dee4c5']).toBe('ERC1155InsufficientBalance');
+    // `cast sig "InsufficientFunds()"` = 0x356680b7, `cast sig "InsufficientAllowance()"` = 0x13be252b (bukti review: buy di C tanpa allowance / tanpa saldo).
+    expect(toFunctionSelector('InsufficientFunds()')).toBe('0x356680b7');
+    expect(toFunctionSelector('InsufficientAllowance()')).toBe('0x13be252b');
+    expect(REVERT_SELECTOR['0x356680b7']).toBe('InsufficientFunds');
+    expect(REVERT_SELECTOR['0x13be252b']).toBe('InsufficientAllowance');
+    for (const sel of Object.keys(REVERT_SELECTOR)) expect(REVERT_TEXT[REVERT_SELECTOR[sel]!], sel).toBeTruthy();
   });
 });

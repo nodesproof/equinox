@@ -74,7 +74,13 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
       escrow: must(core[o + 3], 'escrowedPayouts'), netVega: must(core[o + 4], 'netVega'), freeLiquidity: must(core[o + 5], 'freeLiquidity'),
       sigmaMarkNow: ok<bigint>(core[o + 6]) ?? 0n, capitalRefPrev: must(core[o + 7], 'capitalRefPrev'), tradingPaused: must(core[o + 8], 'tradingPaused'),
       cash: must<bigint>(core[o + 9], 'cash') * ASSET_SCALE, owner: must(core[o + 10], 'owner'),
-      boards: BOARDS.map((_, j) => { const b = must<readonly [bigint, boolean, bigint, readonly bigint[]]>(core[o + 11 + j], 'board'); return { settled: b[1], settlementPrice: b[2] }; }),
+      // `board(id)` revert `BoardUnknown` bila board manifest belum terdaftar di pool ini (mis. list-boards gagal di tengah jalan: sudah ada di A/B,
+      // belum di C) — pool pertama tetap wajib (`must`), pool lain memakai default "belum settle" agar halaman tidak jatuh.
+      boards: BOARDS.map((_, j) => {
+        const r = core[o + 11 + j];
+        const b = i === 0 ? must<readonly [bigint, boolean, bigint, readonly bigint[]]>(r, 'board') : ok<readonly [bigint, boolean, bigint, readonly bigint[]]>(r);
+        return b ? { settled: b[1], settlementPrice: b[2] } : { settled: false, settlementPrice: 0n };
+      }),
     };
   });
   // --- seri: series(id), quoteBuy(id, 1), quoteClose(id, 1) per pool ---

@@ -22,6 +22,8 @@ describe.skipIf(!enabled)('live Sepolia', () => {
     for (const k of POOL_KEYS) {
       expect(await client.readContract({ address: POOLS[k].pool, abi: equinoxPoolAbi, functionName: 'math' }), `${k} math()`).toBe(POOLS[k].math);
       expect(await client.readContract({ address: POOLS[k].pool, abi: equinoxPoolAbi, functionName: 'asset' }), `${k} asset()`).toBe(POOLS[k].asset);
+      // Setiap board manifest terdaftar di setiap pool (snapshot menoleransi `board()` yang revert di pool selain yang pertama — di sini dibuktikan tidak terjadi).
+      expect(await client.readContract({ address: POOLS[k].pool, abi: equinoxPoolAbi, functionName: 'boardCount', blockNumber: s.blockNumber }), `${k} boardCount()`).toBeGreaterThanOrEqual(BigInt(BOARDS.length));
       // `cash` snapshot = balanceOf(pool) pada aset pool itu (WAD); pool C hidup dengan aset asli — saldo > 0 sejak seed dari faucet Paxos.
       expect(s.pools[k].cash, `${k} cash`).toBe((await client.readContract({ address: POOLS[k].asset, abi: mockUsdgAbi, functionName: 'balanceOf', args: [POOLS[k].pool], blockNumber: s.blockNumber })) * ASSET_SCALE);
       expect(s.pools[k].cash > 0n, `${k} cash > 0`).toBe(true);

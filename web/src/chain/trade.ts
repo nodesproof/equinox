@@ -64,4 +64,7 @@ export const REVERT_TEXT: Record<string, string> = {
   ERC4626ExceededMaxWithdraw: 'The pool cannot free that much liquidity right now — withdraw less.',
   ERC4626ExceededMaxDeposit: 'Deposit exceeds the pool\'s maximum right now.',
   ERC1155InsufficientBalance: 'Not enough option units in your wallet for this series — close or claim at most your position.',
+  // Error milik token USDG Paxos (Pool C) — selector dipetakan di wallet.ts REVERT_SELECTOR karena tidak ada di ABI pool.
+  InsufficientFunds: 'Not enough USDG in your wallet for this pool — Pool C uses Paxos USDG (get 100/day at faucet.paxos.com).',
+  InsufficientAllowance: 'Approve USDG (Paxos) for pool C first.',
 };

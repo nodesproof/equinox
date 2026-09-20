@@ -12,7 +12,7 @@ section{background:var(--panel);border:1px solid var(--line);border-radius:12px;
 table{width:100%;border-collapse:collapse;font-size:.9em}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child,th.l,td.l{text-align:left}
 tr.atm td{background:#172238}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.grid2{grid-template-columns:1fr}}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:16px}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px}.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono)}
 form.trade{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}label{display:flex;flex-direction:column;gap:4px;font-size:.9em;color:var(--muted)}
 input,select,button{font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:#0e1628;color:var(--fg)}button{cursor:pointer;background:#1b2a48}button.primary{background:var(--gold);color:#111;font-weight:600}button:disabled{opacity:.5;cursor:default}

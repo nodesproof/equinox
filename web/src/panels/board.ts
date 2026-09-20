@@ -17,7 +17,7 @@ export function createBoard(): BoardPanel {
     'Quotes are per 1.0 unit at each pool\'s own inventory (σ_mark(util)); Δ is inventory, not math. ',
     'Parity ✓ = both math contracts (Solidity control vs Stylus) return byte-identical prices for identical inputs (S, K, t, σ_mark(0)) at this block — K5. ',
     'Gas = eth_estimateGas of buy(1 unit) from the seed-LP wallet; σ is computed by the shared engine, so the A/B difference is the two pricing calls (Stylus program cached). ',
-    hasC ? 'Pool C: same Stylus math and engine as B, settled in Paxos USDG (testnet) — a much smaller pool, so its inventory term (σ_mark(util)) sits higher.' : null);
+    hasC ? 'Pool C: same Stylus math and engine as B, settled in Paxos USDG (testnet); its inventory term (σ_mark(util)) follows its own pool size.' : null);
   // Kolom per pool dibangun dari POOL_KEYS; Δ dan Parity tetap A vs B (kontrol Solidity vs Stylus) — C memakai math yang sama dengan B.
   const heads = ['Board', 'K', 'C/P', ...POOL_KEYS.map((k) => `Buy ${k}`), 'Δ A|B', ...POOL_KEYS.map((k) => `Close ${k}`), 'Parity', ...POOL_KEYS.map((k) => `OI ${k}`), `σ_buy ${POOL_KEYS.join(' | ')}`];
   const root = el('section', {}, el('h2', { text: `Series board — Pool A (control) vs Pool B (Stylus)${hasC ? ` · Pool C (Stylus, real USDG)` : ''}` }),

@@ -132,7 +132,12 @@ export function createTrade(): TradePanel {
     if (busy) return;
     busy = true; paintEnabled();
     try { const hash = await write(await build(k, acct), acct); logLine(true, what, '', hash); }
-    catch (e) { logLine(false, what, decodeRevert(e), e instanceof TxFailed ? e.hash : undefined); }
+    catch (e) {
+      let msg = decodeRevert(e);
+      // Pool ber-aset faucet (C, ≈ 90 USDG): cap cadangan 80 % × kapital (≈ 72 USDG) sudah tercapai oleh K × 0,03 unit — arahkan ke ukuran kecil atau A/B.
+      if (POOLS[k].faucet === 'paxos' && /^(Reserve cap|Vega cap)/.test(msg)) msg += ' Pool C is a faucet-scale pool — try 0.01 units or use A/B.';
+      logLine(false, what, msg, e instanceof TxFailed ? e.hash : undefined);
+    }
     finally { busy = false; paintEnabled(); hooks.onChange(); }
   }
 
@@ -206,7 +211,7 @@ export function createTrade(): TradePanel {
     setText(approveNote, `${assetLabel(pool)} allowance for pool ${pool} is below 1,000,000 — approve once (MAX).`);
     setText(poolLabel, POOLS[pool].label);
     const mint = POOLS[pool].faucet === 'mint';
-    setText(faucetHead, mint ? 'Faucet (MockUSDG, open mint)' : `Faucet (${assetLabel(pool)}, 100 USDG per wallet per day)`);
+    setText(faucetHead, mint ? 'Faucet (MockUSDG, open mint)' : `Faucet — ${assetLabel(pool)}, 100 USDG per wallet per day`);
     faucetBtn.classList.toggle('hidden', !mint); faucetLink.classList.toggle('hidden', mint);
     if (!account) { summary.replaceChildren(); return; }
     const positions = (k: PoolKey) => { const xs = u ? ALL_SERIES.flatMap((s, i) => ((u.positions[k][i] ?? 0n) > 0n ? [`${wad(u.positions[k][i]!, 2)} ${seriesLabel(s)}`] : [])) : []; return xs.length ? xs.join(', ') : '—'; };
