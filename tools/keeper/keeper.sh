@@ -59,6 +59,7 @@ seq_heal() {
   local SQ ANS ST res
   SQ=$(cast call --rpc-url "$RPC" "$SEQ" "latestRoundData()(uint80,int256,uint256,uint256,uint80)") || return 1
   ANS=$(echo "$SQ" | sed -n 2p | awk '{print $1}'); ST=$(echo "$SQ" | sed -n 3p | awk '{print $1}')
+  [[ "$ANS" =~ ^-?[0-9]+$ && "$ST" =~ ^[0-9]+$ ]] || return 1   # hasil baca cacat → jangan bertindak
   if [ "$ANS" == "0" ] && [ "$ST" != "0" ] && [ $((NOW - ST)) -ge 3600 ]; then echo "sequencer mock: up, startedAt $ST (umur $((NOW - ST)) s) — ok"; return 0; fi
   echo "!! sequencer mock: answer=$ANS startedAt=$ST (umur $((NOW - ST)) s) — kuotasi/settle terblokir; pulihkan: set(0, $((NOW - 7200)))"
   if [ "$DRY" == "1" ]; then echo "sequencer set (simulasi): $SEQ set(int256,uint256) 0 $((NOW - 7200))"
