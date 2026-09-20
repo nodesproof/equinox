@@ -12,6 +12,7 @@
 | K1 | Peran Equinox di buildathon | Submisi kedua, paket lengkap (form HackQuest, video script, Q&A juri, scorecard, runbook) |
 | K2 | Kedalaman UI | Dashboard **+ trading lewat wallet** (MetaMask/injected): faucet, deposit/redeem, buy/close/claim dari browser |
 | K3 | Sumber harga di Sepolia | **Chainlink ETH/USD asli** — σ_base benar-benar dari print nyata; waktu tidak bisa di-warp, settlement nyata terjadi di grid Jumat |
+| K5 | Klaim identitas di chain hidup | **Paritas matematika**, bukan kuotasi pool byte-identik: kedua kontrak `math` memberi harga identik untuk input identik (S, K, t, σ) — diverifikasi langsung (`cappedCall`/`quote` pada kedua alamat math; `onchain-check` 20/20). Kuotasi pool ditampilkan berdampingan dengan util masing-masing dan **boleh berbeda** oleh dampak inventaris begitu histori trade menyimpang (ulangan put di A pada round berbeda pada 20 Sep: netVega Δ 1,64 → kuotasi berbeda di digit ke-5; trade juri pada satu pool akan memperbesar selisih). `sepolia-demo.sh` membandingkan kuotasi pool hanya bila `netVega` dan `reserved` sama pada blok itu, selain itu membandingkan paritas math dan mencetak Δ kuotasi |
 | K4 | σ identik A vs B pada feed hidup | **Satu vol engine bersama** (`EquinoxFactory.createPoolWithVol`): dua engine terpisah tidak bisa tetap identik karena `poke()` hanya mengamati round terakhir dan setiap trade hanya mem-poke engine pool-nya sendiri → histori observasi (dan EWMA) A/B menyimpang. Di Sepolia engine dibuat untuk Pool B (math Stylus) dan dipakai Pool A juga. Konsekuensi jujur: gas `buy` A vs B di Sepolia hanya membandingkan jalur pricing (2 × `cappedCall`); `sqrt` σ sama-sama Stylus. Benchmark devnode (dua engine, feed mock statis) tetap apples-to-apples |
 
 Turunan K3: narasi deterministik §13 (warp 7 hari, settle 4.500, claim) tetap direkam dari Foundry (Pool A/kontrol) karena Foundry tidak bisa mengeksekusi Stylus dan chain publik tidak bisa di-warp; identitas A = B sudah dibuktikan on-chain (Plan 2 §13, Sepolia 20 Sep).
@@ -82,7 +83,7 @@ Dari wallet owner: `usdg.approve` kedua pool; `deposit(1_000_000e6)` ke masing-m
 
 ### 3.5 Demo live — `tools/demo/sepolia-demo.sh`
 Menjalankan narasi identik di A dan B dari wallet owner, mencetak tabel dan menulis `docs/DEMO_LOG.md` (tanggal, blok, tx hash Arbiscan `https://sepolia.arbiscan.io/tx/…`):
-1. `quoteBuy` 10 C 2.800 (board 25 Sep) — cetak premi, σ_buy, Δ, vega, spot untuk A dan B; **assert identik**.
+1. `quoteBuy` 10 C 2.800 (board 25 Sep) — cetak premi, σ_buy, Δ, vega, spot untuk A dan B; **assert identik hanya bila `netVega` dan `reserved` A == B pada blok itu**; selain itu assert paritas math (harga dari kedua kontrak math pada input identik) dan cetak Δ kuotasi pool (K5).
 2. `buy` 10 C 2.800 di A dan B (gas dicetak; rasio).
 3. `quoteBuy` 1 P 2.400 → cetak mid vs floor `minPremiumBps × K` (pada S ≈ 2.627 dan 5 hari put ini ≈ 9 % OTM, mid ≈ 11 USDG > floor 1,2 — floor yang menang untuk deep-OTM diperagakan `Narrative.t.sol`); `buy` 1 P 2.400.
 4. `close` 5 C 2.800 di A dan B.
@@ -127,7 +128,7 @@ web/
 
 ### 4.3 Panel
 1. **Header**: nama, chain (421614) + status RPC, harga feed & umur round, blok; σ_base/σ_mark(0) (engine bersama, K4); per pool A/B: util, kapital referensi, `tradingPaused`.
-2. **Papan seri**: tabel 12 baris × kolom {expiry, strike, C/P, OI A/B, premi beli/unit A | B, proceeds tutup/unit A | B, Δ, vega, status (terbuka/blackout/expired/settled + `payoutPerUnit`)}; baris identik → tanda ✓ "identik"; **kolom gas buy A vs B**.
+2. **Papan seri**: tabel 12 baris × kolom {expiry, strike, C/P, OI A/B, premi beli/unit A | B, proceeds tutup/unit A | B, Δ, vega, status (terbuka/blackout/expired/settled + `payoutPerUnit`)}; kolom **paritas math** per seri (harga `cappedCall`/`quote` dari kedua kontrak math pada input yang sama: S, K, t, σ_mark(0)) → ✓ "identik" (K5); kuotasi pool A | B berdampingan dengan util masing-masing dan Δ bila inventaris berbeda; **kolom gas buy A vs B**.
 3. **NAV**: per pool: kas, escrow, reserved, liability MtM (= kas − escrow − NAV), NAV, NAV/share, util, netVega; share & nilai milik wallet.
 4. **Trade** (aktif setelah connect): pilih pool (A/B; default B), **faucet** (`MockUSDG.mint(me, 100_000e6)`), **approve** (max), **deposit/redeem** (input USDG/share, preview lewat `previewDeposit/previewRedeem`), **buy** (seri + ukuran; `quoteBuy` live; `maxPremium = (premi+fee) × 1,01`), **close** (ukuran ≤ saldo; `minProceeds = quote × 0,99`), **claim** (seri settled; payout yang akan diterima). Setiap tx: tombol → tanda tangan → hash + link Arbiscan → refresh snapshot. Chain salah → `wallet_switchEthereumChain` (dan `wallet_addEthereumChain` bila perlu). Peta error selector → pesan (mis. `UtilizationExceeded` → "cap utilisasi 80 % tercapai — kapital referensi di-lag 1 hari").
 5. **Aktivitas**: 50 event terakhir (pool, jenis, seri, ukuran, harga/σ, tx), grafik σ_base dari `Observed`.
@@ -138,11 +139,11 @@ web/
 
 ### 4.5 Test web
 - `format.test.ts` (WAD/6 dp → string, pembulatan tampilan), `seriesId.test.ts` (`keccak256(abi.encode(pool, expiry, strike, isCall))` == `token.seriesId` untuk seri di JSON — nilai diambil dari JSON), `abi.test.ts` (ABI yang di-generate memuat fungsi yang dipakai).
-- `parity.network.test.ts` (dijalankan bila `EQUINOX_NETWORK_TESTS=1`): kuotasi yang akan ditampilkan == `quoteBuy` on-chain; A == B untuk semua seri terbuka; NAV yang dihitung panel == `totalAssets()`.
+- `parity.network.test.ts` (dijalankan bila `EQUINOX_NETWORK_TESTS=1`): kuotasi yang akan ditampilkan == `quoteBuy` on-chain per pool; paritas math A == B untuk semua seri terbuka (panggilan langsung ke kedua kontrak math dengan input identik, K5); NAV yang dihitung panel == `totalAssets()`.
 - `npm run typecheck`, `vite build` hijau; halaman terbuka tanpa error konsol pada RPC publik.
 
 ### 4.6 Kriteria terima Plan 3b
-Dashboard live di `nodesproof.github.io/equinox/` menampilkan 12 seri × 2 pool dengan kuotasi identik, NAV, gas A vs B, aktivitas; alur trade lengkap (faucet → approve → deposit → buy → close → claim) berhasil dari MetaMask di Sepolia (direkam sebagai bukti); CI `web` hijau.
+Dashboard live di `nodesproof.github.io/equinox/` menampilkan 12 seri × 2 pool dengan paritas math ✓ dan kuotasi pool berdampingan (Δ inventaris bila ada), NAV, gas A vs B, aktivitas; alur trade lengkap (faucet → approve → deposit → buy → close → claim) berhasil dari MetaMask di Sepolia (direkam sebagai bukti); CI `web` hijau.
 
 ---
 
