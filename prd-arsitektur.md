@@ -841,7 +841,7 @@ T5 dan T3 layak disorot di pitch: satu invariant yang dibuktikan fuzz (solvabili
 | INV-16 | `quoteBuy(id, n) ≥ quoteClose(id, n)` untuk setiap seri terbuka dan setiap n — menguatkan INV-9 untuk vega negatif |
 
 ### Skenario test wajib
-1. **Happy path:** LP deposit 1 juta → trader beli 10 C 4.200 → σ_mark naik terukur → warp 7 h → feed 4.500 → settle → claim 3.000 → NAV LP = 1.000.000 + premi − 3.000, dengan premi ≥ 648,68 (mid) karena spread dan dampak inventaris; fee ke treasury tidak masuk NAV.
+1. **Happy path:** LP deposit 1 juta → trader beli 10 C 4.200 → σ_mark naik terukur → warp 7 h → feed 4.500 → settle → claim 3.000 → NAV LP = 1.000.000 + premi − 3.000 − bounty 2, dengan premi ≥ 648,68 (mid) karena spread dan dampak inventaris; fee ke treasury tidak masuk NAV.
 2. **Solvabilitas ekstrem:** 200 C 4.000 (util 80%) → feed 40.000 → settle → payout = 800.000 = reserved; LP sisa ≥ 200.000 + premi.
 3. **Deep-OTM tidak nol:** P 2.600 7 h → premi = max(0,000005·size, floor 5 bps·K) → floor yang menang; tercatat.
 4. **Wash trade:** beli 50 → tutup 50 dalam blok yang sama → trader rugi ≥ 2·s·vega + fee (INV-9).

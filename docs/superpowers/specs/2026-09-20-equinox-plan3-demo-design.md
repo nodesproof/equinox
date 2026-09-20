@@ -12,7 +12,7 @@
 | K1 | Peran Equinox di buildathon | Submisi kedua, paket lengkap (form HackQuest, video script, Q&A juri, scorecard, runbook) |
 | K2 | Kedalaman UI | Dashboard **+ trading lewat wallet** (MetaMask/injected): faucet, deposit/redeem, buy/close/claim dari browser |
 | K3 | Sumber harga di Sepolia | **Chainlink ETH/USD asli** — σ_base benar-benar dari print nyata; waktu tidak bisa di-warp, settlement nyata terjadi di grid Jumat |
-| K5 | Klaim identitas di chain hidup | **Paritas matematika**, bukan kuotasi pool byte-identik: kedua kontrak `math` memberi harga identik untuk input identik (S, K, t, σ) — diverifikasi langsung (`cappedCall`/`quote` pada kedua alamat math; `onchain-check` 20/20). Kuotasi pool ditampilkan berdampingan dengan util masing-masing dan **boleh berbeda** oleh dampak inventaris begitu histori trade menyimpang (ulangan put di A pada round berbeda pada 20 Sep: netVega Δ 1,64 → kuotasi berbeda di digit ke-5; trade juri pada satu pool akan memperbesar selisih). `sepolia-demo.sh` membandingkan kuotasi pool hanya bila `netVega` dan `reserved` sama pada blok itu, selain itu membandingkan paritas math dan mencetak Δ kuotasi |
+| K5 | Klaim identitas di chain hidup | **Paritas matematika**, bukan kuotasi pool byte-identik: kedua kontrak `math` memberi harga identik untuk input identik (S, K, t, σ) — diverifikasi langsung (`cappedCall`/`quote` pada kedua alamat math; `onchain-check` 20/20). Kuotasi pool ditampilkan berdampingan dengan util masing-masing dan **boleh berbeda** oleh dampak inventaris begitu histori trade menyimpang (ulangan put di A pada round berbeda pada 20 Sep: netVega Δ 1,64 → kuotasi berbeda di digit ke-5; trade juri pada satu pool akan memperbesar selisih). `sepolia-demo.sh` membandingkan kuotasi pool hanya bila `netVega` dan kapital-untuk-cap (`min(kas − escrow, capitalRefPrev)`) sama pada blok itu, selain itu membandingkan paritas math dan mencetak Δ kuotasi |
 | K4 | σ identik A vs B pada feed hidup | **Satu vol engine bersama** (`EquinoxFactory.createPoolWithVol`): dua engine terpisah tidak bisa tetap identik karena `poke()` hanya mengamati round terakhir dan setiap trade hanya mem-poke engine pool-nya sendiri → histori observasi (dan EWMA) A/B menyimpang. Di Sepolia engine dibuat untuk Pool B (math Stylus) dan dipakai Pool A juga. Konsekuensi jujur: gas `buy` A vs B di Sepolia hanya membandingkan jalur pricing (2 × `cappedCall`); `sqrt` σ sama-sama Stylus. Benchmark devnode (dua engine, feed mock statis) tetap apples-to-apples |
 
 Turunan K3: narasi deterministik §13 (warp 7 hari, settle 4.500, claim) tetap direkam dari Foundry (Pool A/kontrol) karena Foundry tidak bisa mengeksekusi Stylus dan chain publik tidak bisa di-warp; identitas A = B sudah dibuktikan on-chain (Plan 2 §13, Sepolia 20 Sep).
@@ -39,8 +39,8 @@ Dua rencana, satu spec:
 
 ```
 Sepolia (421614)
-  Chainlink ETH/USD ──► EquinoxVolEngine A ──► EquinoxPool A ──► BlackScholesSol   (kontrol)
-        │                EquinoxVolEngine B ──► EquinoxPool B ──► bs-stylus (WASM) (Equinox)
+  Chainlink ETH/USD ──► EquinoxVolEngine (satu, bersama — K4) ──┬──► EquinoxPool A ──► BlackScholesSol   (kontrol)
+        │                                                        └──► EquinoxPool B ──► bs-stylus (WASM) (Equinox)
   MockSequencerFeed ─┘   MockUSDG (faucet)     EquinoxOptionToken A/B
         ▲                                           ▲
   keeper.yml (cron 15 mnt: poke, settle)      web/ (GitHub Pages) ──► viem: baca (multicall3) + tulis (wallet)
@@ -77,17 +77,17 @@ Dari wallet owner: `usdg.approve` kedua pool; `deposit(1_000_000e6)` ke masing-m
 ### 3.4 Keeper — `tools/keeper/keeper.sh` + `.github/workflows/keeper.yml`
 - Cron `*/15 * * * *` (GitHub Actions; jitter beberapa menit dapat diterima), `workflow_dispatch` untuk manual.
 - Wallet **keeper terpisah** (bukan owner): dibuat `cast wallet new`, didanai ≈ 0,02 Sepolia ETH; kunci disimpan sebagai secret repo `KEEPER_PRIVATE_KEY`; RPC dari secret opsional `SEPOLIA_RPC_URL` (default RPC publik). Bounty settle (2 USDG mock) menumpuk di wallet keeper — tidak penting.
-- Logika: `vol.poke()` sekali (engine bersama; no-op murah bila round belum berubah); lalu per pool (A lalu B), untuk setiap board di JSON dengan `expiry ≤ now` dan `settled == false` (baca `board(id)`): `settle(id)`, revert `SettlementNotReady`/`BoardAlreadySettled` ditoleransi (log, exit 0). Setelah `settle` sukses, tulis hash ke log job (JSON tidak diubah oleh keeper — tanpa commit dari CI).
-- Pemeriksaan kesehatan yang dicetak tiap run: umur round feed, `programTimeLeft` program Stylus (ArbWasm `0x…71`), `totalAssets()` A vs B, `sigmaMarkNow()` A vs B (harus identik — bila beda, job **gagal** agar terlihat).
+- Logika: `vol.poke()` sekali (engine bersama; no-op murah bila round belum berubah; gagal → lanjut); cek `MockSequencerFeed` (setter terbuka — pulihkan `set(0, now − 7200)` bila answer ≠ 0 / grace dipasang ulang); lalu per pool (A lalu B), untuk setiap board di JSON dengan `settled == false` (baca `board(id)`): pre-flight `cast call settle(id)` — revert `BoardNotExpired`/`SettlementNotReady`/`BoardAlreadySettled`/`OracleStale` dinamai dan ditoleransi (log, exit 0) — lalu kirim dengan estimasi × 1,5 dan cek `status` receipt; satu settle gagal → board/pool berikutnya. Setelah `settle` sukses, tulis hash + `board(id)` ke log job (JSON tidak diubah oleh keeper — tanpa commit dari CI).
+- Pemeriksaan kesehatan yang dicetak tiap run: umur round feed, `programTimeLeft` program Stylus (ArbWasm `0x…71`), `totalAssets()` A vs B, σ_base / σ_mark(0) (engine bersama) dan keadaan per pool (`reserved`, escrow — util per pool sah berbeda) — tidak ada assert; kegagalan membaca kesehatan tidak memblokir settle.
 - Mode `DRY_RUN=1` (hanya `cast call`/`estimateGas`) untuk test lokal.
 
 ### 3.5 Demo live — `tools/demo/sepolia-demo.sh`
 Menjalankan narasi identik di A dan B dari wallet owner, mencetak tabel dan menulis `docs/DEMO_LOG.md` (tanggal, blok, tx hash Arbiscan `https://sepolia.arbiscan.io/tx/…`):
-1. `quoteBuy` 10 C 2.800 (board 25 Sep) — cetak premi, σ_buy, Δ, vega, spot untuk A dan B; **assert identik hanya bila `netVega` dan `reserved` A == B pada blok itu**; selain itu assert paritas math (harga dari kedua kontrak math pada input identik) dan cetak Δ kuotasi pool (K5).
+1. `quoteBuy` 10 C 2.800 (board 25 Sep) — cetak premi, σ_buy, Δ, vega, spot untuk A dan B; **assert identik hanya bila `netVega` dan kapital-untuk-cap (`min(kas − escrow, capitalRefPrev)`) A == B pada blok itu**; selalu assert paritas math (harga dari kedua kontrak math pada input identik) dan premi tiap pool == `math`-nya sendiri; selain itu cetak Δ kuotasi pool (K5). Blok ini juga dijalankan sendiri, read-only, lewat `--check`.
 2. `buy` 10 C 2.800 di A dan B (gas dicetak; rasio).
 3. `quoteBuy` 1 P 2.400 → cetak mid vs floor `minPremiumBps × K` (pada S ≈ 2.627 dan 5 hari put ini ≈ 9 % OTM, mid ≈ 11 USDG > floor 1,2 — floor yang menang untuk deep-OTM diperagakan `Narrative.t.sol`); `buy` 1 P 2.400.
 4. `close` 5 C 2.800 di A dan B.
-5. Cetak NAV, `sigmaMarkNow`, `reserved`, `netVega`, `freeLiquidity` A vs B (identik) dan saldo share owner.
+5. Cetak NAV, `reserved`, `netVega`, `escrowedPayouts`, `freeLiquidity`, `sigmaMarkNow` A vs B pada blok yang sama (✓ bila sama; NAV/`netVega` boleh berbeda oleh skew timestamp tx, `sigmaMarkNow` = σ_mark(util) per pool — tidak di-assert). Yang identik by construction: `vol()` A == B dan σ_mark(0) dari engine bersama.
 Langkah pasca-settlement (dijalankan terpisah setelah 25 Sep 08:00 UTC, `sepolia-demo.sh --claim`): `claim` seri C 2.800 & P 2.400 (payout sesuai `settlementPrice`), cetak NAV sebelum/sesudah, tambahkan ke `DEMO_LOG.md`.
 Skrip memakai `cast send` sekuensial; peringatan skew timestamp A/B (lihat BENCHMARK) berlaku — kuotasi diambil pada blok yang sama lewat `cast call --block`.
 
@@ -96,8 +96,8 @@ Test Foundry pada Pool A (kontrol) yang **mencetak** tabel §13 dengan `console2
 
 ### 3.7 Kriteria terima Plan 3a
 - `forge test` hijau (+ test deployer & Narrative); `forge build --sizes` hijau.
-- `deployments/arbitrum-sepolia.json` berisi pools/boards; `sigmaMarkNow()` A == B; 12 seri per pool terlihat di Arbiscan.
-- `sepolia-demo.sh` selesai exit 0 dengan kuotasi A == B dan `docs/DEMO_LOG.md` berisi hash.
+- `deployments/arbitrum-sepolia.json` berisi pools/boards; `vol()` A == B (engine bersama) dan σ_mark(0) bersama — `sigmaMarkNow()` (σ_mark(util)) tidak dituntut sama; 12 seri per pool terlihat di Arbiscan.
+- `sepolia-demo.sh` selesai exit 0 dengan paritas math ✓ (kuotasi A == B hanya bila inventaris sama, K5) dan `docs/DEMO_LOG.md` berisi hash.
 - Workflow keeper berjalan hijau minimal 2× berturut-turut (dispatch manual + cron).
 - `docs/BENCHMARK.md` mendapat baris gas `buy`/`close` Sepolia (program cached) dari demo.
 
