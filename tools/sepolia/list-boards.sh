@@ -36,28 +36,36 @@ PY
   STRIKES="[$(python3 -c "print(','.join(str(int(k)*10**18) for k in '$KS'.split(',')))")]"
   # boardId harus sama di semua pool (dan sama dengan entri manifest bila expiry ini sudah tercatat di kunci lain)
   BID=$(jq -r --arg e "$EXP" '.pools.boards[] | select(.expiry == ($e|tonumber)) | .id' "$DEP")
-  SIDS='{}'; LTX='{}'
+  K0=${KS%%,*}; SSIG="series(uint256)(uint32,uint64,uint128,bool,bool,uint256,uint256,uint256)"
   for K in "${TODO[@]}"; do
     P=$(jq -r ".pools.$K.pool" "$DEP"); T=$(jq -r ".pools.$K.token" "$DEP")
-    res=$(send "$P" "createBoard(uint64,uint128[])" "$EXP" "$STRIKES"); tx=${res%% *}; gas=${res##* }
-    ID=$(( $(num "$P" "boardCount()(uint256)") - 1 )); [ -n "$BID" ] || BID=$ID
+    # pra-cek on-chain: seri C K0 expiry ini sudah punya series().expiry == EXP → board sudah dibuat di pool ini (mis. run sebelumnya mati
+    # setelah tx sukses tetapi sebelum manifest ditulis) — jangan kirim createBoard lagi (BadStrike/duplikat); ambil boardId dari series().boardId.
+    SR=$(cast call --rpc-url "$RPC" "$P" "$SSIG" "$(num "$T" "seriesId(address,uint64,uint128,bool)(uint256)" "$P" "$EXP" "${K0}000000000000000000" true)")
+    if [ "$(sed -n 2p <<< "$SR" | awk '{print $1}')" == "$EXP" ]; then
+      ID=$(sed -n 1p <<< "$SR" | awk '{print $1}'); tx="(sudah ada on-chain)"; LINK="sudah ada on-chain (boardId $ID) — tanpa tx, hanya dicatat"
+    else
+      res=$(send "$P" "createBoard(uint64,uint128[])" "$EXP" "$STRIKES"); tx=${res%% *}; gas=${res##* }
+      ID=$(( $(num "$P" "boardCount()(uint256)") - 1 )); LINK="$(arbiscan "$tx") (gas $gas)"
+    fi
+    [ -n "$BID" ] || BID=$ID
     [ "$ID" == "$BID" ] || die "boardId $K ($ID) != $BID"
     # seri: derivasi deterministik (sama dengan board(id).seriesIds — urutan C,P per strike), lalu cek expiry on-chain
     S="[]"
     for k in ${KS//,/ }; do for c in true false; do
       id=$(num "$T" "seriesId(address,uint64,uint128,bool)(uint256)" "$P" "$EXP" "${k}000000000000000000" "$c")
-      [ "$(cast call --rpc-url "$RPC" "$P" "series(uint256)(uint32,uint64,uint128,bool,bool,uint256,uint256,uint256)" "$id" | sed -n 2p | awk '{print $1}')" == "$EXP" ] || die "seri $id tidak terdaftar di $K"
+      [ "$(cast call --rpc-url "$RPC" "$P" "$SSIG" "$id" | sed -n 2p | awk '{print $1}')" == "$EXP" ] || die "seri $id tidak terdaftar di $K"
       S=$(jq -cn --argjson a "$S" --arg v "$id" '$a + [$v]')
     done; done
-    SIDS=$(jq -cn --argjson o "$SIDS" --arg k "$K" --argjson v "$S" '$o + {($k): $v}'); LTX=$(jq -cn --argjson o "$LTX" --arg k "$K" --arg v "$tx" '$o + {($k): $v}')
-    echo "board $ID expiry $EXP strikes $KS di $K: $(arbiscan "$tx") (gas $gas)"
+    # tulis manifest SEGERA per kunci (bukan setelah semua kunci): entri baru pada kunci pertama expiry ini, selain itu gabungkan
+    # seriesIds[K]/listTx[K] ke entri yang ada — bila kunci berikutnya gagal, yang sudah terkirim tetap tercatat dan run ulang melewatinya.
+    if jq -e --arg e "$EXP" '.pools.boards[] | select(.expiry == ($e|tonumber))' "$DEP" >/dev/null; then
+      jq_set '(.pools.boards[] | select(.expiry == ($e|tonumber))) |= (.seriesIds[$k] = $s | .listTx[$k] = $tx)' --arg e "$EXP" --arg k "$K" --argjson s "$S" --arg tx "$tx"
+    else
+      jq_set '.pools.boards += [{id:($id|tonumber), expiry:($e|tonumber), expiryIso:$iso, strikes:($ks|split(",")), seriesIds:{($k): $s}, listTx:{($k): $tx}}]' \
+        --arg id "$BID" --arg e "$EXP" --arg iso "$(date -u -d @"$EXP" +%Y-%m-%dT%H:%M:%SZ)" --arg ks "$KS" --arg k "$K" --argjson s "$S" --arg tx "$tx"
+    fi
+    echo "board $ID expiry $EXP strikes $KS di $K: $LINK"
   done
-  # tulis manifest: entri baru bila expiry belum ada, selain itu gabungkan seriesIds/listTx kunci baru ke entri yang ada
-  if jq -e --arg e "$EXP" '.pools.boards[] | select(.expiry == ($e|tonumber))' "$DEP" >/dev/null; then
-    jq_set '(.pools.boards[] | select(.expiry == ($e|tonumber))) |= (.seriesIds += $sids | .listTx += $ltx)' --arg e "$EXP" --argjson sids "$SIDS" --argjson ltx "$LTX"
-  else
-    jq_set '.pools.boards += [{id:($id|tonumber), expiry:($e|tonumber), expiryIso:$iso, strikes:($ks|split(",")), seriesIds:$sids, listTx:$ltx}]' \
-      --arg id "$BID" --arg e "$EXP" --arg iso "$(date -u -d @"$EXP" +%Y-%m-%dT%H:%M:%SZ)" --arg ks "$KS" --argjson sids "$SIDS" --argjson ltx "$LTX"
-  fi
 done
 jq '.pools.boards' "$DEP"

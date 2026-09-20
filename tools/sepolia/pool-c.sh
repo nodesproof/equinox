@@ -2,6 +2,7 @@
 # Pool C — Equinox di atas USDG Paxos asli (Arbitrum Sepolia): pool identik dengan Pool B (math Stylus, engine vol bersama,
 # cfg sama) tetapi asset() = USDG 0xFFC9…1892 (faucet.paxos.com, 100 USDG/wallet/hari; mint tertutup). Tidak ada kontrak baru.
 # Pakai: tools/sepolia/pool-c.sh deploy | boards | seed [USDG=100] [--keeper] | redeem [USDG=10] | trade [SIZE=0.01] | status
+# `trade` memakai board manifest pertama yang expiry-nya > now + 1 jam (seri indeks 2 = C K1); `boards` melewati board yang sudah ada on-chain.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; source "$ROOT/tools/sepolia/lib.sh"
 USDG_REAL=0xFFC95faa3d63Cde504a05B567C600B78C0b41892
 FACTORY=$(addr "$(jq -r .pools.deployer "$DEP")" "factory()(address)")
@@ -10,10 +11,12 @@ STYLUS=$(jq -r .blackScholesStylus "$DEP"); B=$(jq -r .pools.B.pool "$DEP")
 C=$(jq -r '.pools.C.pool // empty' "$DEP"); TOK_C=$(jq -r '.pools.C.token // empty' "$DEP")
 CFGSIG="cfg()(uint16,uint16,uint16,uint16,uint32,uint8,uint32,uint8,uint32,uint128,uint128)"
 PSIG="params()(uint64,uint64,uint64,uint64,uint64,uint64)"
+SSIG="series(uint256)(uint32,uint64,uint128,bool,bool,uint256,uint256,uint256)"   # baris 1 boardId, baris 2 expiry
 DSIG='createPoolWithVol((address,address,address,address,address,address,(uint16,uint16,uint16,uint16,uint32,uint8,uint32,uint8,uint32,uint128,uint128),(uint64,uint64,uint64,uint64,uint64,uint64),uint256,int256,string,string),address)'
 MAX=115792089237316195423570985008687907853269984665640564039457584007913129639935
 tuple() { cast call --rpc-url "$RPC" "$1" "$2" | awk '{print $1}' | paste -sd, | sed 's/^/(/; s/$/)/'; }   # "(a,b,…)" dari keluaran multi-baris
-ge() { python3 -c 'import sys; sys.exit(0 if int(sys.argv[1]) >= int(sys.argv[2]) else 1)' "$1" "$2"; }   # perbandingan uint256 (bash [ -ge ] meluap di atas 2^63)
+# perbandingan uint256 (bash [ -ge ] meluap di atas 2^63); masukan bukan angka (mis. cast call gagal → string kosong/pesan) → die, bukan traceback python
+ge() { if [[ "${1:-}" =~ ^[0-9]+$ && "${2:-}" =~ ^[0-9]+$ ]]; then python3 -c 'import sys; sys.exit(0 if int(sys.argv[1]) >= int(sys.argv[2]) else 1)' "$1" "$2"; else die "nilai bukan angka: ${1:-}/${2:-}"; fi; }
 need_c() { [ -n "$C" ] || die "pools.C belum ada — jalankan: $0 deploy"; }
 case "${1:-}" in
 deploy)
@@ -42,16 +45,25 @@ boards)
     if jq -e ".pools.boards[$i].seriesIds.C" "$DEP" >/dev/null; then echo "board $i ($EXP): seriesIds.C sudah ada — lewati"; continue; fi
     [ "$EXP" -gt "$NOW" ] || { echo "board $i ($EXP) sudah lewat — tidak dibuat di C"; continue; }
     STRIKES="[$(python3 -c "print(','.join(str(int(k)*10**18) for k in '$KS'.split(',')))")]"
-    res=$(send "$C" "createBoard(uint64,uint128[])" "$EXP" "$STRIKES"); tx=${res%% *}; gas=${res##* }
-    IDC=$(( $(num "$C" "boardCount()(uint256)") - 1 )); [ "$IDC" == "$(jq -r ".pools.boards[$i].id" "$DEP")" ] || die "boardId C ($IDC) ≠ manifest ($i)"
+    # pra-cek on-chain (sama dengan list-boards.sh): seri C K0 sudah punya series().expiry == EXP → board sudah ada di C (run sebelumnya mati
+    # setelah tx sukses, sebelum manifest ditulis) — lewati send, boardId dari series().boardId, tetap derivasi + catat.
+    K0=${KS%%,*}
+    SR=$(cast call --rpc-url "$RPC" "$C" "$SSIG" "$(num "$TOK_C" "seriesId(address,uint64,uint128,bool)(uint256)" "$C" "$EXP" "${K0}000000000000000000" true)")
+    if [ "$(sed -n 2p <<< "$SR" | awk '{print $1}')" == "$EXP" ]; then
+      IDC=$(sed -n 1p <<< "$SR" | awk '{print $1}'); tx="(sudah ada on-chain)"; LINK="sudah ada on-chain (boardId $IDC) — tanpa tx, hanya dicatat"
+    else
+      res=$(send "$C" "createBoard(uint64,uint128[])" "$EXP" "$STRIKES"); tx=${res%% *}; gas=${res##* }
+      IDC=$(( $(num "$C" "boardCount()(uint256)") - 1 )); LINK="$(arbiscan "$tx") gas=$gas"
+    fi
+    [ "$IDC" == "$(jq -r ".pools.boards[$i].id" "$DEP")" ] || die "boardId C ($IDC) ≠ manifest ($i)"
     SC="[]"
     for k in ${KS//,/ }; do for c in true false; do
       id=$(num "$TOK_C" "seriesId(address,uint64,uint128,bool)(uint256)" "$C" "$EXP" "${k}000000000000000000" "$c")
-      [ "$(cast call --rpc-url "$RPC" "$C" "series(uint256)(uint32,uint64,uint128,bool,bool,uint256,uint256,uint256)" "$id" | sed -n 2p | awk '{print $1}')" == "$EXP" ] || die "seri $id tidak terdaftar di C"
+      [ "$(cast call --rpc-url "$RPC" "$C" "$SSIG" "$id" | sed -n 2p | awk '{print $1}')" == "$EXP" ] || die "seri $id tidak terdaftar di C"
       SC=$(jq -cn --argjson a "$SC" --arg v "$id" '$a + [$v]')
     done; done
     jq_set ".pools.boards[$i].seriesIds.C = \$sc | .pools.boards[$i].listTx.C = \$tx" --argjson sc "$SC" --arg tx "$tx"
-    echo "board $i expiry $EXP strikes $KS di C: $(arbiscan "$tx") gas=$gas"
+    echo "board $i expiry $EXP strikes $KS di C: $LINK"
   done
   ;;
 seed)
@@ -77,14 +89,19 @@ redeem)
   ;;
 trade)
   need_c; SIZE=${2:-0.01}; SW=$(python3 -c "print(int(round(float('$SIZE')*10**18)))")
-  ID=$(jq -r '.pools.boards[1].seriesIds.C[2]' "$DEP"); [ "$ID" != "null" ] || die "board 1 belum ada di C — jalankan: $0 boards"   # C K1 board 1 (2 Okt)
+  # Board manifest pertama yang expiry-nya > now + 1 jam (masih terbuka, jauh dari blackout 60 s), seri indeks 2 = C K1 (strike tengah) — bukan indeks board tetap.
+  NOW=$(date -u +%s)
+  BI=$(jq -r --arg now "$NOW" '[.pools.boards[] | select(.expiry > ($now|tonumber) + 3600)] | first | .id // empty' "$DEP")
+  [ -n "$BI" ] || die "tidak ada board manifest dengan expiry > now + 1 jam — list board baru dulu (tools/sepolia/list-boards.sh EXPIRY:K1,K2,K3)"
+  ID=$(jq -r ".pools.boards[$BI].seriesIds.C[2] // empty" "$DEP"); [ -n "$ID" ] || die "board $BI belum ada di C — jalankan: $0 boards"
+  KMID=$(jq -r ".pools.boards[$BI].strikes[1]" "$DEP"); EXPI=$(jq -r ".pools.boards[$BI].expiryIso" "$DEP")
   # Batas dari JALUR EKSEKUSI (buy/close mem-poke engine dulu): premi = eth_call buy(id,size,MAX) dari ME; fee diskalakan dari rasio quoteBuy (+1 pembulatan); ×1,01.
   Q=$(cast call --rpc-url "$RPC" "$C" "quoteBuy(uint256,uint256)((uint256,uint256,uint256,int256,uint256,uint256))" "$ID" "$SW"); PQ=$(field "$Q" 1); FQ=$(field "$Q" 2)
   PE=$(cast call --rpc-url "$RPC" --from "$ME" "$C" "buy(uint256,uint256,uint256)(uint256)" "$ID" "$SW" "$MAX" | awk '{print $1}')
   FE=$(( PQ == 0 ? FQ : FQ * PE / PQ + 1 )); MAXP=$(( (PE + FE) * 10100 / 10000 ))
   ge "$(num "$USDG_REAL" "allowance(address,address)(uint256)" "$ME" "$C")" "$MAXP" || send "$USDG_REAL" "approve(address,uint256)" "$C" "$MAX" >/dev/null
   res=$(send "$C" "buy(uint256,uint256,uint256)" "$ID" "$SW" "$MAXP"); txb=${res%% *}; gb=${res##* }
-  echo "buy $SIZE C(board 1, K1) di C: quote $PQ+$FQ · exec $PE · max $MAXP · $(arbiscan "$txb") gas=$gb"
+  echo "buy $SIZE C $KMID (board $BI, $EXPI) di C: quote $PQ+$FQ · exec $PE · max $MAXP · $(arbiscan "$txb") gas=$gb"
   CE=$(cast call --rpc-url "$RPC" --from "$ME" "$C" "close(uint256,uint256,uint256)(uint256)" "$ID" "$SW" 0 | awk '{print $1}'); MINP=$(( CE * 9900 / 10000 ))
   res=$(send "$C" "close(uint256,uint256,uint256)" "$ID" "$SW" "$MINP"); txc=${res%% *}; gc=${res##* }
   echo "close $SIZE di C: exec $CE · min $MINP · $(arbiscan "$txc") gas=$gc · posisi sisa $(num "$TOK_C" "balanceOf(address,uint256)(uint256)" "$ME" "$ID")"

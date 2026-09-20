@@ -46,7 +46,7 @@ health() {
   echo "stylus programTimeLeft: $((TL / 86400)) hari $([ "$TL" -lt 2592000 ] && echo '!! < 30 hari — aktivasi ulang diperlukan')"
   echo "sigmaBase: $(num "$VOL" "sigmaBase()(uint256)")  NAV A: $(num "$A" "totalAssets()(uint256)")  NAV B: $(num "$B" "totalAssets()(uint256)")"
   echo "reserved A/B: $(num "$A" "reserved()(uint256)") / $(num "$B" "reserved()(uint256)")  escrow A/B: $(num "$A" "escrowedPayouts()(uint256)") / $(num "$B" "escrowedPayouts()(uint256)")"
-  # Pool C (USDG Paxos asli) bila sudah ada di manifest — engine yang sama, skala ratusan USDG
+  # Pool C (USDG Paxos asli) bila sudah ada di manifest — engine yang sama, skala faucet (≈ 90 USDG per 20 Sep; 100 per wallet per hari)
   [ -z "$C" ] || echo "NAV C: $(num "$C" "totalAssets()(uint256)")  reserved C: $(num "$C" "reserved()(uint256)")  escrow C: $(num "$C" "escrowedPayouts()(uint256)")"
 }
 health || echo "kesehatan: gagal dibaca — lanjut"
