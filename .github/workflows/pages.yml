@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths: ['web/**', 'deployments/**', '.github/workflows/pages.yml']
   workflow_dispatch:
+  # Harian 04:23 UTC: seed event (public/events-seed.json) disegarkan dan halaman dibangun ulang — langkah seed sudah toleran gagal.
+  schedule: [{ cron: '23 4 * * *' }]
 permissions: { contents: read, pages: write, id-token: write }
 concurrency: { group: pages, cancel-in-progress: true }
 jobs:

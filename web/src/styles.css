@@ -8,7 +8,7 @@ h1{margin:0;font-size:28px;color:var(--gold)}h2{font-size:16px;margin:0 0 8px;co
 .badge{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:.85em;display:inline-flex;gap:6px;align-items:center}.lamp{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
 .badge-live .lamp{background:var(--ok)}.badge-stale .lamp{background:var(--warn)}.badge-wait .lamp{background:var(--muted)}
 .banner{background:#3a2a12;border:1px solid var(--warn);padding:8px 12px;border-radius:8px;margin:12px 0}
-section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0}
+section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0;overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:.9em}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child,th.l,td.l{text-align:left}
 tr.atm td{background:#172238}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.grid2{grid-template-columns:1fr}}
