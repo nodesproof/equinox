@@ -1,6 +1,6 @@
 import { el, setText } from '../ui/dom';
 import { shortHash, wad } from '../ui/format';
-import { POOLS, explorerTx } from '../deployment';
+import { POOLS, POOL_KEYS, explorerTx } from '../deployment';
 import { polyline } from '../ui/svg';
 import type { Panel } from './types';
 import type { Events, TradeEvent } from '../chain/events';
@@ -19,13 +19,13 @@ const row = (t: TradeEvent) => el('tr', {},
   el('td', {}, el('a', { class: 'mono', href: explorerTx(t.tx), target: '_blank', rel: 'noopener', title: t.who ? `by ${t.who}` : undefined, text: `${shortHash(t.tx)} ↗` })),
 );
 
-/** Umpan aktivitas: kiri tabel event pool terbaru (kedua pool), kanan grafik σ_base dari `Observed` engine bersama. Digerakkan oleh `setEvents`, bukan snapshot. */
+/** Umpan aktivitas: kiri tabel event pool terbaru (semua pool di POOL_KEYS), kanan grafik σ_base dari `Observed` engine bersama. Digerakkan oleh `setEvents`, bukan snapshot. */
 export function createActivity(): ActivityPanel {
   const tbody = el('tbody');
   const tableNote = el('p', { class: 'muted small', text: 'loading events…' });
   const chartBox = el('div', { class: 'chart-box' }, polyline([]));
   const chartNote = el('p', { class: 'muted small', text: 'loading observations…' });
-  const root = el('section', {}, el('h2', { text: 'Activity — pool events (A | B) & σ_base history (shared engine)' }),
+  const root = el('section', {}, el('h2', { text: `Activity — pool events (${POOL_KEYS.join(' | ')}) & σ_base history (shared engine)` }),
     el('div', { class: 'grid2' },
       el('div', {},
         el('table', {}, el('thead', {}, el('tr', {}, ...['Pool', 'Event', 'Series', 'Amount', 'Block', 'Tx'].map((h, i) => el('th', { class: i < 4 ? 'l' : '', text: h })))), tbody),

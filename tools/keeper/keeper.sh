@@ -9,7 +9,7 @@ DEP="${1:-$ROOT/deployments/arbitrum-sepolia.json}"
 : "${KEEPER_PRIVATE_KEY:?KEEPER_PRIVATE_KEY tidak ada}"
 PK="$KEEPER_PRIVATE_KEY"; RPC="${SEPOLIA_RPC_URL:-$(jq -r .rpc "$DEP")}"; DRY="${DRY_RUN:-0}"
 ME=$(cast wallet address --private-key "$PK")
-VOL=$(jq -r .pools.vol "$DEP"); A=$(jq -r .pools.A.pool "$DEP"); B=$(jq -r .pools.B.pool "$DEP")
+VOL=$(jq -r .pools.vol "$DEP"); A=$(jq -r .pools.A.pool "$DEP"); B=$(jq -r .pools.B.pool "$DEP"); C=$(jq -r '.pools.C.pool // empty' "$DEP")
 FEED=$(jq -r .pools.feed "$DEP"); SEQ=$(jq -r .pools.sequencerFeed "$DEP"); STYLUS=$(jq -r .blackScholesStylus "$DEP")
 num() { cast call --rpc-url "$RPC" "$1" "$2" "${@:3}" | awk '{print $1}'; }
 # kirim tx dari wallet keeper: estimasi dulu (revert → return 1, tidak ada tx), gas limit 1,5× estimasi (estimasi Nitro tanpa margin;
@@ -46,6 +46,8 @@ health() {
   echo "stylus programTimeLeft: $((TL / 86400)) hari $([ "$TL" -lt 2592000 ] && echo '!! < 30 hari — aktivasi ulang diperlukan')"
   echo "sigmaBase: $(num "$VOL" "sigmaBase()(uint256)")  NAV A: $(num "$A" "totalAssets()(uint256)")  NAV B: $(num "$B" "totalAssets()(uint256)")"
   echo "reserved A/B: $(num "$A" "reserved()(uint256)") / $(num "$B" "reserved()(uint256)")  escrow A/B: $(num "$A" "escrowedPayouts()(uint256)") / $(num "$B" "escrowedPayouts()(uint256)")"
+  # Pool C (USDG Paxos asli) bila sudah ada di manifest — engine yang sama, skala faucet (≈ 90 USDG per 20 Sep; 100 per wallet per hari)
+  [ -z "$C" ] || echo "NAV C: $(num "$C" "totalAssets()(uint256)")  reserved C: $(num "$C" "reserved()(uint256)")  escrow C: $(num "$C" "escrowedPayouts()(uint256)")"
 }
 health || echo "kesehatan: gagal dibaca — lanjut"
 # --- poke (engine bersama): gagal → lanjut ke settle ---
@@ -69,7 +71,8 @@ seq_heal() {
 seq_heal || echo "sequencer mock: gagal dibaca — lanjut"
 # --- settle board yang sudah expiry: pre-flight `cast call` (nama error bila belum bisa) → ksend; gagal → board/pool berikutnya ---
 BSIG="board(uint256)(uint64,bool,uint256,uint256[])"
-for P in "$A" "$B"; do
+# semua pool dari manifest (A, B, dan C bila ada) — board yang sama di tiap pool, settle per pool
+for P in $(jq -r '[.pools.A.pool, .pools.B.pool, .pools.C.pool // empty] | .[]' "$DEP"); do
   for ID in $(jq -r '.pools.boards[].id' "$DEP"); do
     BD=$(cast call --rpc-url "$RPC" "$P" "$BSIG" "$ID") || { echo "board $ID @ $P: gagal dibaca — lewati"; continue; }
     EXP=$(echo "$BD" | sed -n 1p | awk '{print $1}'); SETTLED=$(echo "$BD" | sed -n 2p)

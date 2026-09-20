@@ -1,13 +1,13 @@
 import type { Address, ContractFunctionParameters } from 'viem';
 import type { Client } from './client';
-import { ALL_SERIES, BOARDS, FEED, POOLS, POOL_KEYS, USDG, VOL, WAD, type PoolKey, type SeriesRef } from '../deployment';
+import { ALL_SERIES, BOARDS, FEED, POOLS, POOL_KEYS, VOL, WAD, type PoolKey, type SeriesRef } from '../deployment';
 import { equinoxPoolAbi } from '../abi/equinoxPool';
 import { equinoxVolEngineAbi } from '../abi/equinoxVolEngine';
 import { equinoxOptionTokenAbi } from '../abi/equinoxOptionToken';
 import { mockUsdgAbi } from '../abi/mockUsdg';
 import { aggregatorV3Abi } from '../abi/aggregatorV3';
 
-// Satu `Snapshot` per refresh: tiga multicall (inti, seri, pengguna) yang semuanya dipaku ke blok yang sama.
+// Satu `Snapshot` per refresh: tiga multicall (inti, seri, pengguna) yang semuanya dipaku ke blok yang sama; setiap bagian per pool diiterasi dari `POOL_KEYS`.
 export interface Quote { premium: bigint; fee: bigint; sigma: bigint; delta: bigint; vega: bigint; spot: bigint }
 export interface PoolState {
   totalAssets: bigint; totalSupply: bigint; reserved: bigint; escrow: bigint; netVega: bigint; freeLiquidity: bigint;
@@ -15,8 +15,9 @@ export interface PoolState {
   boards: { settled: boolean; settlementPrice: bigint }[];
 }
 export interface SeriesState { oi: bigint; settled: boolean; payoutPerUnit: bigint; buy: Quote | null; buyError: string | null; close: bigint | null }
-export interface SeriesRow { ref: SeriesRef; A: SeriesState; B: SeriesState }
-export interface UserState { address: Address; usdg: bigint; allowance: Record<PoolKey, bigint>; shares: Record<PoolKey, bigint>; positions: Record<PoolKey, bigint[]> }
+export type SeriesRow = { ref: SeriesRef } & Record<PoolKey, SeriesState>;
+/** `asset[k]` = saldo aset pool k di wallet (A/B: MockUSDG yang sama, C: USDG Paxos) — satu entri per pool karena asetnya bisa berbeda. */
+export interface UserState { address: Address; asset: Record<PoolKey, bigint>; allowance: Record<PoolKey, bigint>; shares: Record<PoolKey, bigint>; positions: Record<PoolKey, bigint[]> }
 export interface Snapshot {
   fetchedAtMs: number; blockNumber: bigint; blockTime: number;
   feed: { answer: bigint; updatedAt: number; spotWad: bigint };
@@ -27,7 +28,7 @@ export interface Snapshot {
 }
 
 const ONE = WAD;
-/** USDG 6 dp → WAD (EquinoxPool.assetScale = 10^(18−6)); `cash` disimpan dalam WAD agar satu satuan dengan escrow/reserved/capitalRefPrev. */
+/** Aset 6 dp (MockUSDG maupun USDG Paxos) → WAD (EquinoxPool.assetScale = 10^(18−6)); `cash` disimpan dalam WAD agar satu satuan dengan escrow/reserved/capitalRefPrev. */
 const ASSET_SCALE = 10n ** 12n;
 /** Pelebaran tipe: viem tidak bisa menginfer multicall heterogen yang dibangun lewat flatMap (TS2589); hasil dibaca lewat `MC`. */
 type Call = ContractFunctionParameters;
@@ -49,7 +50,7 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
   const bn = block.number;
   const pool = (k: PoolKey) => ({ address: POOLS[k].pool, abi: equinoxPoolAbi } as const);
   const vol = { address: VOL, abi: equinoxVolEngineAbi } as const;
-  // --- inti: feed, engine, dua pool, board ---
+  // --- inti: feed, engine, setiap pool (POOL_KEYS), board ---
   const coreCalls: Call[] = [
     { address: FEED, abi: aggregatorV3Abi, functionName: 'latestRoundData' },
     { ...vol, functionName: 'sigmaBase' }, { ...vol, functionName: 'sigmaMark', args: [0n] }, { ...vol, functionName: 'varWad' }, { ...vol, functionName: 'params' },
@@ -57,7 +58,7 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
       { ...pool(k), functionName: 'totalAssets' }, { ...pool(k), functionName: 'totalSupply' }, { ...pool(k), functionName: 'reserved' },
       { ...pool(k), functionName: 'escrowedPayouts' }, { ...pool(k), functionName: 'netVega' }, { ...pool(k), functionName: 'freeLiquidity' },
       { ...pool(k), functionName: 'sigmaMarkNow' }, { ...pool(k), functionName: 'capitalRefPrev' }, { ...pool(k), functionName: 'tradingPaused' },
-      { address: USDG, abi: mockUsdgAbi, functionName: 'balanceOf', args: [POOLS[k].pool] }, { ...pool(k), functionName: 'owner' },
+      { address: POOLS[k].asset, abi: mockUsdgAbi, functionName: 'balanceOf', args: [POOLS[k].pool] }, { ...pool(k), functionName: 'owner' },
       ...BOARDS.map((b) => ({ ...pool(k), functionName: 'board', args: [BigInt(b.id)] })),
     ]),
   ];
@@ -73,7 +74,13 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
       escrow: must(core[o + 3], 'escrowedPayouts'), netVega: must(core[o + 4], 'netVega'), freeLiquidity: must(core[o + 5], 'freeLiquidity'),
       sigmaMarkNow: ok<bigint>(core[o + 6]) ?? 0n, capitalRefPrev: must(core[o + 7], 'capitalRefPrev'), tradingPaused: must(core[o + 8], 'tradingPaused'),
       cash: must<bigint>(core[o + 9], 'cash') * ASSET_SCALE, owner: must(core[o + 10], 'owner'),
-      boards: BOARDS.map((_, j) => { const b = must<readonly [bigint, boolean, bigint, readonly bigint[]]>(core[o + 11 + j], 'board'); return { settled: b[1], settlementPrice: b[2] }; }),
+      // `board(id)` revert `BoardUnknown` bila board manifest belum terdaftar di pool ini (mis. list-boards gagal di tengah jalan: sudah ada di A/B,
+      // belum di C) — pool pertama tetap wajib (`must`), pool lain memakai default "belum settle" agar halaman tidak jatuh.
+      boards: BOARDS.map((_, j) => {
+        const r = core[o + 11 + j];
+        const b = i === 0 ? must<readonly [bigint, boolean, bigint, readonly bigint[]]>(r, 'board') : ok<readonly [bigint, boolean, bigint, readonly bigint[]]>(r);
+        return b ? { settled: b[1], settlementPrice: b[2] } : { settled: false, settlementPrice: 0n };
+      }),
     };
   });
   // --- seri: series(id), quoteBuy(id, 1), quoteClose(id, 1) per pool ---
@@ -85,7 +92,7 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
   const sc = await client.multicall({ blockNumber: bn, allowFailure: true, contracts: seriesCalls }) as MC[];
   const series: SeriesRow[] = ALL_SERIES.map((ref, i) => {
     const st = (k: PoolKey, j: number): SeriesState => {
-      const o = (i * 2 + j) * 3;
+      const o = (i * POOL_KEYS.length + j) * 3;
       const sr = must<readonly [number, bigint, bigint, boolean, boolean, bigint, bigint, bigint]>(sc[o], 'series');
       const q = ok<{ premiumAssets: bigint; feeAssets: bigint; sigma: bigint; delta: bigint; vegaTotal: bigint; spotWad: bigint }>(sc[o + 1]);
       const c = ok<readonly [bigint, bigint, bigint]>(sc[o + 2]);
@@ -93,23 +100,27 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
         buy: q ? { premium: q.premiumAssets, fee: q.feeAssets, sigma: q.sigma, delta: q.delta, vega: q.vegaTotal, spot: q.spotWad } : null,
         buyError: q ? null : errName(sc[o + 1]), close: c ? c[0] : null };
     };
-    return { ref, A: st('A', 0), B: st('B', 1) };
+    return { ref, ...Object.fromEntries(POOL_KEYS.map((k, j) => [k, st(k, j)])) } as SeriesRow;
   });
   // --- pengguna (opsional) ---
   let user: UserState | null = null;
   if (account) {
-    const userCalls: Call[] = [
-      { address: USDG, abi: mockUsdgAbi, functionName: 'balanceOf', args: [account] },
-      ...POOL_KEYS.flatMap((k) => [
-        { address: USDG, abi: mockUsdgAbi, functionName: 'allowance', args: [account, POOLS[k].pool] },
-        { ...pool(k), functionName: 'balanceOf', args: [account] },
-        ...ALL_SERIES.map((s) => ({ address: POOLS[k].token, abi: equinoxOptionTokenAbi, functionName: 'balanceOf', args: [account, s.id[k]] })),
-      ]),
-    ];
+    // Per pool: saldo aset pool itu di wallet, allowance aset → pool, share LP, lalu posisi tiap seri (aset dibaca per pool karena C memakai token lain).
+    const userCalls: Call[] = POOL_KEYS.flatMap((k) => [
+      { address: POOLS[k].asset, abi: mockUsdgAbi, functionName: 'balanceOf', args: [account] },
+      { address: POOLS[k].asset, abi: mockUsdgAbi, functionName: 'allowance', args: [account, POOLS[k].pool] },
+      { ...pool(k), functionName: 'balanceOf', args: [account] },
+      ...ALL_SERIES.map((s) => ({ address: POOLS[k].token, abi: equinoxOptionTokenAbi, functionName: 'balanceOf', args: [account, s.id[k]] })),
+    ]);
     const uc = await client.multicall({ blockNumber: bn, allowFailure: true, contracts: userCalls }) as MC[];
-    const n = 2 + ALL_SERIES.length;
-    user = { address: account, usdg: ok<bigint>(uc[0]) ?? 0n, allowance: { A: 0n, B: 0n }, shares: { A: 0n, B: 0n }, positions: { A: [], B: [] } };
-    POOL_KEYS.forEach((k, i) => { const o = 1 + i * n; user!.allowance[k] = ok<bigint>(uc[o]) ?? 0n; user!.shares[k] = ok<bigint>(uc[o + 1]) ?? 0n; user!.positions[k] = ALL_SERIES.map((_, j) => ok<bigint>(uc[o + 2 + j]) ?? 0n); });
+    const n = 3 + ALL_SERIES.length;
+    const u = { address: account, asset: {}, allowance: {}, shares: {}, positions: {} } as UserState;
+    POOL_KEYS.forEach((k, i) => {
+      const o = i * n;
+      u.asset[k] = ok<bigint>(uc[o]) ?? 0n; u.allowance[k] = ok<bigint>(uc[o + 1]) ?? 0n; u.shares[k] = ok<bigint>(uc[o + 2]) ?? 0n;
+      u.positions[k] = ALL_SERIES.map((_, j) => ok<bigint>(uc[o + 3 + j]) ?? 0n);
+    });
+    user = u;
   }
   return {
     fetchedAtMs: Date.now(), blockNumber: bn, blockTime: Number(block.timestamp),
@@ -121,7 +132,9 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
 
 /** Seri ATM terdekat pada board terbuka terdekat — untuk counter gas dan sorotan baris. */
 export function atmSeries(s: Snapshot): SeriesRow | null {
-  const open = s.series.filter((r) => !r.A.settled && r.ref.expiry > s.blockTime + 60 && r.ref.isCall);
+  // Status settled dibaca dari pool pertama (semua pool mendaftar board yang sama; settle per pool bisa berbeda beberapa blok).
+  const k0 = POOL_KEYS[0]!;
+  const open = s.series.filter((r) => !r[k0].settled && r.ref.expiry > s.blockTime + 60 && r.ref.isCall);
   if (open.length === 0) return null;
   const spot = Number(s.feed.spotWad) / 1e18;
   const nearestExpiry = Math.min(...open.map((r) => r.ref.expiry));

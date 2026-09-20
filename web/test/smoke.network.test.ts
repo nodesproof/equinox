@@ -58,7 +58,7 @@ describe.skipIf(!enabled)('smoke: real transactions on Pool B, board 1, from the
     console.log(`me=${me} pool=${POOL} series=${seriesLabel(ref)} before: usdg=${before.usdg} allowance=${before.allowance} shares=${before.shares} position=${before.position}`);
     expect(before.position, 'no pre-existing position on the smoke series').toBe(0n);
 
-    await send('faucet 100 USDG', faucetCall(me, FAUCET));
+    await send('faucet 100 USDG', faucetCall(POOL, me, FAUCET));
     if (before.allowance < ALLOWANCE_MIN) await send('approve USDG (MAX)', approveCall(POOL));
     else console.log('approve: skipped (allowance already ≥ 1e12)');
 

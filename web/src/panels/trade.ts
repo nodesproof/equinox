@@ -1,13 +1,14 @@
 // panels/trade.ts — panel Trade: connect wallet, faucet, approve, deposit/redeem, buy/close/claim; setiap aksi simulate → write → log.
+// Pool dipilih dari `POOL_KEYS`; aset (saldo, allowance, approve, faucet) mengikuti `POOLS[k].asset` — A/B MockUSDG (faucet = mint), C USDG Paxos (faucet eksternal).
 import { formatUnits, parseUnits, type Address } from 'viem';
 import { el, setText } from '../ui/dom';
 import { shortAddr, shortHash, usdg, usdg6, wad } from '../ui/format';
-import { ALL_SERIES, POOLS, POOL_KEYS, explorerAddress, explorerTx, type PoolKey } from '../deployment';
+import { ALL_SERIES, PAXOS_FAUCET, POOLS, POOL_KEYS, explorerAddress, explorerTx, type PoolKey } from '../deployment';
 import { chain, client } from '../chain/client';
 import { equinoxPoolAbi } from '../abi/equinoxPool';
 import { TxFailed, connect, decodeRevert, ensureChain, executedBuy, executedClose, hasWallet, onWalletEvents, write } from '../chain/wallet';
 import {
-  ALLOWANCE_MIN, FAUCET_AMOUNT, MIN_SIZE, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds, redeemCall, scaleFee,
+  ALLOWANCE_MIN, FAUCET_AMOUNT, MIN_SIZE, approveCall, assetLabel, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds, redeemCall, scaleFee,
   seriesLabel, type TradeCall,
 } from '../chain/trade';
 import type { Panel } from './types';
@@ -46,17 +47,24 @@ export function createTrade(): TradePanel {
   const noWallet = el('p', { class: 'muted small' },
     'No injected wallet found — the panel is read-only. Install MetaMask, add Arbitrum Sepolia (chain 421614) and fund it with Sepolia ETH from the ',
     el('a', { href: ETH_FAUCET, target: '_blank', rel: 'noopener', text: 'QuickNode faucet ↗' }),
-    ', then reload. USDG is a mock token minted from the faucet button below (no real value).');
+    ', then reload. USDG on pools A and B is a mock token minted from the faucet button below (no real value); Pool C settles in real Paxos USDG (testnet) — ',
+    el('a', { href: PAXOS_FAUCET, target: '_blank', rel: 'noopener', text: 'faucet.paxos.com ↗' }), ' gives 100 USDG per wallet per day.');
   const gasNote = el('p', { class: 'muted small' }, 'Gas is Sepolia ETH (', el('a', { href: ETH_FAUCET, target: '_blank', rel: 'noopener', text: 'faucet ↗' }),
     '); every action is simulated first (eth_call) so a revert is decoded here before the wallet opens. Buy/close previews are indicative (view quotes at the last observed ',
-    'Chainlink round); execution observes the newest round first, so the 1 % slippage caps (max premium + fee, min proceeds) come from a simulation of the executed path.');
+    'Chainlink round); execution observes the newest round first, so the 1 % slippage caps (max premium + fee, min proceeds) come from a simulation of the executed path. ',
+    'Pools A and B settle in mock USDG (faucet button); Pool C settles in real Paxos USDG — no mint here, get 100 USDG/day at ',
+    el('a', { href: PAXOS_FAUCET, target: '_blank', rel: 'noopener', text: 'faucet.paxos.com ↗' }), '.');
 
   // --- form ---
   const radios = POOL_KEYS.map((k) => el('input', { type: 'radio', name: 'pool', value: k, checked: k === pool }));
   const poolLabel = el('span', { class: 'muted small', text: POOLS[pool].label });
+  // Faucet per jenis aset pool: MockUSDG → tombol mint; USDG Paxos → tautan faucet.paxos.com (100/hari, tanpa mint terbuka). Judul label ikut aset.
+  const faucetHead = el('span', { text: 'Faucet' });
   const faucetBtn = el('button', { type: 'button', text: `Faucet ${usdg(FAUCET_AMOUNT, 0)} USDG` });
+  const faucetLink = el('a', { class: 'link hidden', href: PAXOS_FAUCET, target: '_blank', rel: 'noopener', text: 'Get 100 USDG/day at faucet.paxos.com ↗' });
   const approveBtn = el('button', { type: 'button', text: 'Approve USDG' });
-  const approveBox = el('label', { class: 'hidden' }, 'Allowance', el('span', { class: 'muted small', text: 'USDG allowance for this pool is below 1,000,000 — approve once (MAX).' }), approveBtn);
+  const approveNote = el('span', { class: 'muted small', text: 'USDG allowance for this pool is below 1,000,000 — approve once (MAX).' });
+  const approveBox = el('label', { class: 'hidden' }, 'Allowance', approveNote, approveBtn);
   const depositIn = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'USDG, e.g. 100' });
   const depositPrev = el('span', { class: 'mono small', text: '' });
   const depositBtn = el('button', { type: 'button', class: 'primary', text: 'Deposit' });
@@ -78,7 +86,7 @@ export function createTrade(): TradePanel {
   const log = el('div', { class: 'txlog' }, el('span', { class: 'muted', text: 'No transactions yet.' }));
   const form = el('form', { class: 'trade' },
     el('label', {}, 'Pool', el('span', {}, ...radios.flatMap((r, i) => [r, ` ${POOL_KEYS[i]} `])), poolLabel),
-    el('label', {}, 'Faucet (MockUSDG, open mint)', faucetBtn),
+    el('label', {}, faucetHead, faucetBtn, faucetLink),
     approveBox,
     el('label', {}, 'Deposit (USDG → LP shares)', depositIn, depositPrev, depositBtn),
     el('label', {}, 'Redeem (shares → USDG)', el('span', { class: 'row' }, redeemIn, redeemMax), redeemPrev, redeemBtn),
@@ -124,7 +132,12 @@ export function createTrade(): TradePanel {
     if (busy) return;
     busy = true; paintEnabled();
     try { const hash = await write(await build(k, acct), acct); logLine(true, what, '', hash); }
-    catch (e) { logLine(false, what, decodeRevert(e), e instanceof TxFailed ? e.hash : undefined); }
+    catch (e) {
+      let msg = decodeRevert(e);
+      // Pool ber-aset faucet (C, ≈ 90 USDG): cap cadangan 80 % × kapital (≈ 72 USDG) sudah tercapai oleh K × 0,03 unit — arahkan ke ukuran kecil atau A/B.
+      if (POOLS[k].faucet === 'paxos' && /^(Reserve cap|Vega cap)/.test(msg)) msg += ' Pool C is a faucet-scale pool — try 0.01 units or use A/B.';
+      logLine(false, what, msg, e instanceof TxFailed ? e.hash : undefined);
+    }
     finally { busy = false; paintEnabled(); hooks.onChange(); }
   }
 
@@ -194,20 +207,28 @@ export function createTrade(): TradePanel {
     fill(closeSel, heldRows(false).map(({ r, i, pos }) => ({ i, text: `${seriesLabel(r.ref)} — ${wad(pos, 2)} units` })), account ? 'no open positions' : 'connect wallet to see positions');
     fill(claimSel, heldRows(true).map(({ r, i, pos }) => ({ i, text: `${seriesLabel(r.ref)} — ${wad(pos, 2)} units` })), account ? 'nothing to claim' : 'connect wallet to see positions');
     approveBox.classList.toggle('hidden', !u || u.allowance[pool] >= ALLOWANCE_MIN);
-    setText(approveBtn, `Approve USDG for pool ${pool}`);
+    setText(approveBtn, `Approve ${assetLabel(pool)} for pool ${pool}`);
+    setText(approveNote, `${assetLabel(pool)} allowance for pool ${pool} is below 1,000,000 — approve once (MAX).`);
     setText(poolLabel, POOLS[pool].label);
+    const mint = POOLS[pool].faucet === 'mint';
+    setText(faucetHead, mint ? 'Faucet (MockUSDG, open mint)' : `Faucet — ${assetLabel(pool)}, 100 USDG per wallet per day`);
+    faucetBtn.classList.toggle('hidden', !mint); faucetLink.classList.toggle('hidden', mint);
     if (!account) { summary.replaceChildren(); return; }
     const positions = (k: PoolKey) => { const xs = u ? ALL_SERIES.flatMap((s, i) => ((u.positions[k][i] ?? 0n) > 0n ? [`${wad(u.positions[k][i]!, 2)} ${seriesLabel(s)}`] : [])) : []; return xs.length ? xs.join(', ') : '—'; };
+    // Ringkasan per pool dari POOL_KEYS: saldo aset pool itu (A/B sama-sama MockUSDG, C USDG Paxos), share LP, allowance, posisi.
     const rows: [string, string][] = u
-      ? [['USDG', `${usdg(u.usdg)} USDG`], ['LP shares A | B', `${usdg6(u.shares.A)} | ${usdg6(u.shares.B)}`],
-        ['USDG allowance A | B', POOL_KEYS.map((k) => (u.allowance[k] >= ALLOWANCE_MIN ? 'approved' : 'not approved')).join(' | ')],
-        ['Positions A', positions('A')], ['Positions B', positions('B')]]
+      ? [...POOL_KEYS.map((k): [string, string] => [`Asset balance ${k}`, `${usdg(u.asset[k])} ${assetLabel(k)}`]),
+        [`LP shares ${POOL_KEYS.join(' | ')}`, POOL_KEYS.map((k) => usdg6(u.shares[k])).join(' | ')],
+        [`Allowance ${POOL_KEYS.join(' | ')}`, POOL_KEYS.map((k) => (u.allowance[k] >= ALLOWANCE_MIN ? 'approved' : 'not approved')).join(' | ')],
+        ...POOL_KEYS.map((k): [string, string] => [`Positions ${k}`, positions(k)])]
       : [['Account', wrongChain ? 'wrong network — switch to Arbitrum Sepolia' : 'loading…']];
     summary.replaceChildren(...rows.flatMap(([a, b]) => [el('dt', { text: a }), el('dd', { text: b })]));
   }
   function paintEnabled() {
     const can = hasWallet() && account !== null && !wrongChain && !busy;
     for (const b of [faucetBtn, approveBtn, depositBtn, redeemBtn, buyBtn, closeBtn, claimBtn]) b.disabled = !can;
+    // Tombol faucet hanya hidup pada pool ber-mint terbuka (tombol tersembunyi tetap kontrol label-nya — dinonaktifkan agar klik pada teks label tidak memicunya).
+    faucetBtn.disabled = !can || POOLS[pool].faucet !== 'mint';
     for (const r of radios) r.disabled = busy;
     redeemMax.disabled = !user();
     connectBtn.classList.toggle('hidden', !hasWallet() || (account !== null && !wrongChain));
@@ -237,7 +258,8 @@ export function createTrade(): TradePanel {
     accounts: (a) => setAccount(a[0] ?? null),
     chain: (id) => { wrongChain = id !== chain.id; paintSnapshot(); paintEnabled(); if (!wrongChain) hooks.onChange(); },
   });
-  radios.forEach((r) => r.addEventListener('change', () => { if (r.checked) { pool = r.value as PoolKey; paintSnapshot(); previews(); } }));
+  // Ganti pool → repaint snapshot DAN status tombol (faucet hanya hidup pada pool ber-mint) sebelum tick render berikutnya.
+  radios.forEach((r) => r.addEventListener('change', () => { if (r.checked) { pool = r.value as PoolKey; paintSnapshot(); paintEnabled(); previews(); } }));
   depositIn.addEventListener('input', () => debounce('deposit', () => void previewDeposit()));
   redeemIn.addEventListener('input', () => debounce('redeem', () => void previewRedeem()));
   redeemMax.addEventListener('click', () => { const u = user(); if (u) { redeemIn.value = formatUnits(u.shares[pool], 6); void previewRedeem(); } });
@@ -249,12 +271,12 @@ export function createTrade(): TradePanel {
 
   // Setiap handler menangkap pool dan akun SAAT KLIK (k, acct) sebelum await apa pun; penjaga ukuran dijalankan sebelum RPC mana pun.
   faucetBtn.addEventListener('click', () => {
-    const k = pool, acct = account; if (!acct) return;
-    void run(`faucet ${usdg(FAUCET_AMOUNT, 0)} USDG`, acct, k, (_k, a) => faucetCall(a));
+    const k = pool, acct = account; if (!acct || POOLS[k].faucet !== 'mint') return;
+    void run(`faucet ${usdg(FAUCET_AMOUNT, 0)} USDG (mock)`, acct, k, (kk, a) => faucetCall(kk, a));
   });
   approveBtn.addEventListener('click', () => {
     const k = pool, acct = account; if (!acct) return;
-    void run(`approve USDG for ${k}`, acct, k, (kk) => approveCall(kk));
+    void run(`approve ${assetLabel(k)} for ${k}`, acct, k, (kk) => approveCall(kk));
   });
   depositBtn.addEventListener('click', () => {
     const k = pool, acct = account; if (!acct) return;

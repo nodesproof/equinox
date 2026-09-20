@@ -1,4 +1,4 @@
-// events.ts — umpan aktivitas: event pool (Bought/Closed/Settled/Claimed) di kedua pool + Observed dari engine vol bersama.
+// events.ts — umpan aktivitas: event pool (Bought/Closed/Settled/Claimed) di setiap pool POOL_KEYS + Observed dari engine vol bersama.
 import { parseAbiItem, type Address } from 'viem';
 import type { Client } from './client';
 import { ALL_SERIES, DEPLOYED_AT_BLOCK, POOLS, POOL_KEYS, VOL, type PoolKey } from '../deployment';
@@ -45,7 +45,7 @@ const newestFirst = (a: { block: bigint; logIndex: number }, b: { block: bigint;
 const oldestFirst = (a: { block: bigint; logIndex: number }, b: { block: bigint; logIndex: number }) => -newestFirst(a, b);
 
 export async function readEvents(client: Client, toBlock: bigint, fromBlock: bigint = DEPLOYED_AT_BLOCK): Promise<Events> {
-  // Tiga alamat dibaca paralel (2 pool + engine); tiap alamat berjalan berurutan per jendela CHUNK.
+  // Semua alamat dibaca paralel (satu per pool + engine); tiap alamat berjalan berurutan per jendela CHUNK. Pool C dibuat setelah blok deploy, jadi rentang yang sama mencakupnya.
   const [perPool, obs] = await Promise.all([
     Promise.all(POOL_KEYS.map(async (k): Promise<TradeEvent[]> => {
       const logs = await chunked(fromBlock, toBlock, (a, b) =>

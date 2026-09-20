@@ -6,8 +6,12 @@ import { chain, client } from './client';
 import type { PoolKey } from '../deployment';
 import { MAX_UINT, REVERT_TEXT, poolCall, type TradeCall } from './trade';
 
-/** Selector error yang tidak ada di ABI pool tetapi bisa menggelembung dari kontrak lain yang dipanggil pool (token ERC-1155 saat close/claim). */
-export const REVERT_SELECTOR: Record<string, string> = { '0x03dee4c5': 'ERC1155InsufficientBalance' };
+/** Selector error yang tidak ada di ABI pool tetapi bisa menggelembung dari kontrak lain yang dipanggil pool: token ERC-1155 saat close/claim, dan
+ *  USDG Paxos (Pool C) saat buy/deposit — token itu memakai error tanpa argumen `InsufficientFunds()` / `InsufficientAllowance()`, bukan
+ *  `ERC20InsufficientBalance/Allowance` OpenZeppelin seperti MockUSDG (verifikasi: `cast sig "InsufficientFunds()"` → 0x356680b7, `InsufficientAllowance()` → 0x13be252b). */
+export const REVERT_SELECTOR: Record<string, string> = {
+  '0x03dee4c5': 'ERC1155InsufficientBalance', '0x356680b7': 'InsufficientFunds', '0x13be252b': 'InsufficientAllowance',
+};
 /** Tx yang sudah terkirim tetapi gagal (status 0), belum terkonfirmasi sampai timeout, atau receipt-nya gagal dibaca — hash disimpan agar log tetap punya tautan explorer. */
 export class TxFailed extends Error {
   constructor(message: string, readonly hash: Hash) { super(message); this.name = 'TxFailed'; }

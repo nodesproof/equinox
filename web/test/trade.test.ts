@@ -1,11 +1,11 @@
 // test/trade.test.ts — unit tanpa jaringan: pembangun calldata, matematika slippage, label seri, tabel pesan revert.
 import { describe, expect, it } from 'vitest';
 import { toFunctionSelector } from 'viem';
-import { ALL_SERIES, POOLS, USDG } from '../src/deployment';
+import { ALL_SERIES, POOLS, POOL_KEYS, USDG } from '../src/deployment';
 import { REVERT_SELECTOR } from '../src/chain/wallet';
 import {
-  ALLOWANCE_MIN, FAUCET_AMOUNT, MAX_UINT, MIN_SIZE, REVERT_TEXT, SLIPPAGE_BPS, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds,
-  poolCall, redeemCall, scaleFee, seriesLabel,
+  ALLOWANCE_MIN, FAUCET_AMOUNT, MAX_UINT, MIN_SIZE, REVERT_TEXT, SLIPPAGE_BPS, approveCall, assetLabel, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium,
+  minProceeds, poolCall, redeemCall, scaleFee, seriesLabel,
 } from '../src/chain/trade';
 
 const addr = '0x90351bB1E85a17D5f70c62C0cC076D39D897076D' as const;
@@ -52,16 +52,21 @@ describe('call builders (args match the ABI order)', () => {
     expect(depositCall('B', 10_000_000n, addr)).toMatchObject({ address: POOLS.B.pool, functionName: 'deposit', args: [10_000_000n, addr] });
     expect(redeemCall('B', 9_999_010n, addr)).toMatchObject({ address: POOLS.B.pool, functionName: 'redeem', args: [9_999_010n, addr, addr] });
   });
-  it('approve(pool, MAX_UINT) on USDG; faucet = MockUSDG.mint(to, 100,000 USDG)', () => {
+  it('approve(pool, MAX_UINT) on the pool\'s own asset; faucet = MockUSDG.mint(to, 100,000 USDG) on mint pools only', () => {
     expect(MAX_UINT).toBe(2n ** 256n - 1n);
     expect(approveCall('A')).toMatchObject({ address: USDG, functionName: 'approve', args: [POOLS.A.pool, MAX_UINT] });
     expect(approveCall('B').args[0]).toBe(POOLS.B.pool);
-    const f = faucetCall(addr);
+    // Aset per pool: approve selalu ke `POOLS[k].asset` (A/B MockUSDG; C USDG Paxos asli), spender = pool k.
+    for (const k of POOL_KEYS) expect(approveCall(k), `approve ${k}`).toMatchObject({ address: POOLS[k].asset, functionName: 'approve', args: [POOLS[k].pool, MAX_UINT] });
+    if (POOL_KEYS.includes('C')) { expect(approveCall('C').address).not.toBe(USDG); expect(assetLabel('C')).toBe('USDG (Paxos)'); expect(faucetCall('C', addr).address).toBe(POOLS.C.asset); }
+    expect(assetLabel('A')).toBe('USDG (mock)'); expect(assetLabel('B')).toBe('USDG (mock)');
+    const f = faucetCall('A', addr);
     expect(f).toMatchObject({ address: USDG, functionName: 'mint' });
+    expect(faucetCall('B', addr).address).toBe(USDG);
     expect(f.args[0]).toBe(addr);
     expect(f.args[1]).toBe(100_000_000_000n);
     expect(FAUCET_AMOUNT).toBe(100_000_000_000n);
-    expect(faucetCall(addr, 100_000_000n).args[1]).toBe(100_000_000n);
+    expect(faucetCall('A', addr, 100_000_000n).args[1]).toBe(100_000_000n);
   });
   it('thresholds: approve shown below 1e12 (1,000,000 USDG); contract minSize 0.01 units', () => {
     expect(ALLOWANCE_MIN).toBe(10n ** 12n);
@@ -79,15 +84,26 @@ describe('seriesLabel', () => {
 });
 
 describe('REVERT_TEXT', () => {
-  it('has 16 human messages keyed by custom error name (12 pool + 3 ERC-4626 + 1 ERC-1155 token error)', () => {
-    expect(Object.keys(REVERT_TEXT)).toHaveLength(16);
+  it('has 18 human messages keyed by custom error name (12 pool + 3 ERC-4626 + 1 ERC-1155 + 2 USDG Paxos token errors)', () => {
+    expect(Object.keys(REVERT_TEXT)).toHaveLength(18);
     for (const k of ['OracleStale', 'UtilizationExceeded', 'VegaCapExceeded', 'SlippageExceeded', 'SeriesExpired', 'SeriesSettled', 'SizeTooSmall', 'TradingIsPaused', 'MathUnavailable', 'NotSettled', 'ERC20InsufficientBalance', 'ERC20InsufficientAllowance',
-      'ERC4626ExceededMaxRedeem', 'ERC4626ExceededMaxWithdraw', 'ERC4626ExceededMaxDeposit', 'ERC1155InsufficientBalance']) {
+      'ERC4626ExceededMaxRedeem', 'ERC4626ExceededMaxWithdraw', 'ERC4626ExceededMaxDeposit', 'ERC1155InsufficientBalance', 'InsufficientFunds', 'InsufficientAllowance']) {
       expect(REVERT_TEXT[k], k).toBeTruthy();
     }
+    // Saldo kurang: pesan menyebut kedua jalur aset (faucet tombol untuk A/B, faucet.paxos.com untuk C).
+    expect(REVERT_TEXT.ERC20InsufficientBalance).toBe('Not enough USDG in your wallet for this pool — mock pools (A, B): use the faucet button; Pool C: get 100 USDG/day at faucet.paxos.com.');
+    // Error token USDG Paxos (Pool C): `InsufficientFunds()` (saldo) dan `InsufficientAllowance()` (belum approve) — bukan error OpenZeppelin.
+    expect(REVERT_TEXT.InsufficientFunds).toBe('Not enough USDG in your wallet for this pool — Pool C uses Paxos USDG (get 100/day at faucet.paxos.com).');
+    expect(REVERT_TEXT.InsufficientAllowance).toBe('Approve USDG (Paxos) for pool C first.');
   });
-  it('maps the ERC-1155 selector (not in the pool ABI) to the same text', () => {
+  it('maps the ERC-1155 and Paxos USDG selectors (not in the pool ABI) to the same texts', () => {
     expect(toFunctionSelector('ERC1155InsufficientBalance(address,uint256,uint256,uint256)')).toBe('0x03dee4c5');
     expect(REVERT_SELECTOR['0x03dee4c5']).toBe('ERC1155InsufficientBalance');
+    // `cast sig "InsufficientFunds()"` = 0x356680b7, `cast sig "InsufficientAllowance()"` = 0x13be252b (bukti review: buy di C tanpa allowance / tanpa saldo).
+    expect(toFunctionSelector('InsufficientFunds()')).toBe('0x356680b7');
+    expect(toFunctionSelector('InsufficientAllowance()')).toBe('0x13be252b');
+    expect(REVERT_SELECTOR['0x356680b7']).toBe('InsufficientFunds');
+    expect(REVERT_SELECTOR['0x13be252b']).toBe('InsufficientAllowance');
+    for (const sel of Object.keys(REVERT_SELECTOR)) expect(REVERT_TEXT[REVERT_SELECTOR[sel]!], sel).toBeTruthy();
   });
 });
