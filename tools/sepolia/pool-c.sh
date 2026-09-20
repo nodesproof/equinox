@@ -13,6 +13,7 @@ PSIG="params()(uint64,uint64,uint64,uint64,uint64,uint64)"
 DSIG='createPoolWithVol((address,address,address,address,address,address,(uint16,uint16,uint16,uint16,uint32,uint8,uint32,uint8,uint32,uint128,uint128),(uint64,uint64,uint64,uint64,uint64,uint64),uint256,int256,string,string),address)'
 MAX=115792089237316195423570985008687907853269984665640564039457584007913129639935
 tuple() { cast call --rpc-url "$RPC" "$1" "$2" | awk '{print $1}' | paste -sd, | sed 's/^/(/; s/$/)/'; }   # "(a,b,…)" dari keluaran multi-baris
+ge() { python3 -c 'import sys; sys.exit(0 if int(sys.argv[1]) >= int(sys.argv[2]) else 1)' "$1" "$2"; }   # perbandingan uint256 (bash [ -ge ] meluap di atas 2^63)
 need_c() { [ -n "$C" ] || die "pools.C belum ada — jalankan: $0 deploy"; }
 case "${1:-}" in
 deploy)
@@ -58,10 +59,11 @@ seed)
   if [ "${3:-}" == "--keeper" ]; then : "${KEEPER_PRIVATE_KEY:?}"; PK="$KEEPER_PRIVATE_KEY"; ME=$(cast wallet address --private-key "$PK"); fi
   BAL=$(num "$USDG_REAL" "balanceOf(address)(uint256)" "$ME")
   [ "$BAL" -ge "$UNITS" ] || { echo "DITUNDA: saldo USDG asli $ME = $BAL (butuh $UNITS). Minta 100 USDG/hari di https://faucet.paxos.com/ (USDG → Arbitrum Sepolia)."; exit 3; }
-  [ "$(num "$USDG_REAL" "allowance(address,address)(uint256)" "$ME" "$C")" -ge "$UNITS" ] || { res=$(send "$USDG_REAL" "approve(address,uint256)" "$C" "$MAX"); echo "approve: $(arbiscan "${res%% *}")"; }
+  ge "$(num "$USDG_REAL" "allowance(address,address)(uint256)" "$ME" "$C")" "$UNITS" || { res=$(send "$USDG_REAL" "approve(address,uint256)" "$C" "$MAX"); echo "approve: $(arbiscan "${res%% *}")"; }
   res=$(send "$C" "deposit(uint256,address)" "$UNITS" "$ME"); tx=${res%% *}; gas=${res##* }
   echo "deposit $AMT USDG → Pool C dari $ME: $(arbiscan "$tx") gas=$gas · shares $(num "$C" "balanceOf(address)(uint256)" "$ME") · NAV $(num "$C" "totalAssets()(uint256)") · capitalRefPrev $(num "$C" "capitalRefPrev()(uint256)")"
   ;;
+# UNITS diperlakukan sebagai shares ≈ USDG hanya selama owner LP tunggal tanpa P&L — pakai previewRedeem()/convertToShares() bila itu berubah.
 redeem)
   # Owner saja (LP == owner kunci); tarik sebagian kapital LP kembali jadi USDG asli di wallet owner supaya wallet yang
   # sama juga bisa jadi trader (bayar premi) — lihat catatan blokir di DEMO_LOG. UNITS dalam unit shares (6 dp), 1:1
@@ -80,7 +82,7 @@ trade)
   Q=$(cast call --rpc-url "$RPC" "$C" "quoteBuy(uint256,uint256)((uint256,uint256,uint256,int256,uint256,uint256))" "$ID" "$SW"); PQ=$(field "$Q" 1); FQ=$(field "$Q" 2)
   PE=$(cast call --rpc-url "$RPC" --from "$ME" "$C" "buy(uint256,uint256,uint256)(uint256)" "$ID" "$SW" "$MAX" | awk '{print $1}')
   FE=$(( PQ == 0 ? FQ : FQ * PE / PQ + 1 )); MAXP=$(( (PE + FE) * 10100 / 10000 ))
-  [ "$(num "$USDG_REAL" "allowance(address,address)(uint256)" "$ME" "$C")" -ge "$MAXP" ] || send "$USDG_REAL" "approve(address,uint256)" "$C" "$MAX" >/dev/null
+  ge "$(num "$USDG_REAL" "allowance(address,address)(uint256)" "$ME" "$C")" "$MAXP" || send "$USDG_REAL" "approve(address,uint256)" "$C" "$MAX" >/dev/null
   res=$(send "$C" "buy(uint256,uint256,uint256)" "$ID" "$SW" "$MAXP"); txb=${res%% *}; gb=${res##* }
   echo "buy $SIZE C(board 1, K1) di C: quote $PQ+$FQ · exec $PE · max $MAXP · $(arbiscan "$txb") gas=$gb"
   CE=$(cast call --rpc-url "$RPC" --from "$ME" "$C" "close(uint256,uint256,uint256)(uint256)" "$ID" "$SW" 0 | awk '{print $1}'); MINP=$(( CE * 9900 / 10000 ))
