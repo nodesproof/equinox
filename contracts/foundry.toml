@@ -9,4 +9,13 @@ via_ir = true
 remappings = [
     "@prb/math/=lib/prb-math/",
     "forge-std/=lib/forge-std/src/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
 ]
+
+[invariant]
+runs = 32
+depth = 128
+fail_on_revert = false
+
+[fuzz]
+runs = 256

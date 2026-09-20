@@ -5,8 +5,11 @@ set -euo pipefail
 NAME=$1; RPC=$2; PK=$3
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/stylus/bs-stylus"
-OUT=$(cargo stylus deploy --endpoint "$RPC" --private-key "$PK" --no-verify 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
-echo "$OUT" | grep -E "contract size|deployed code at|activated" || { echo "$OUT"; exit 1; }
+# STYLUS_MAX_FEE_GWEI (opsional): batas maxFeePerGas untuk tx deploy/aktivasi — perlu di Sepolia bila estimasi cargo-stylus
+# jatuh di bawah base fee blok ("max fee per gas less than block base fee"); mis. STYLUS_MAX_FEE_GWEI=1.
+OUT=$(cargo stylus deploy --endpoint "$RPC" --private-key "$PK" --no-verify ${STYLUS_MAX_FEE_GWEI:+--max-fee-per-gas-gwei "$STYLUS_MAX_FEE_GWEI"} 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
+echo "$OUT" | grep -E "contract size|deployed code at|activated" || true
+echo "$OUT" | grep -q "deployed code at address" || { echo "$OUT"; echo "deploy Stylus gagal — kontrak Solidity tidak dideploy"; exit 1; }
 STYLUS=$(echo "$OUT" | grep "deployed code at address" | awk '{print $NF}' || true)
 cd "$ROOT/contracts"
 SOL=$(forge create --rpc-url "$RPC" --private-key "$PK" --broadcast src/math/BlackScholesSol.sol:BlackScholesSol | grep "Deployed to" | awk '{print $3}')

@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 deployments/devnode.json
 tools/devnode/.nitro-devnode/
+web/dist/
+# web: ditulis `npm run seed` pada setiap build (pemindaian event sejak deploy); bukan sumber.
+web/public/events-seed.json
