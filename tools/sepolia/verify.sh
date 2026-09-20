@@ -2,7 +2,8 @@
 # Verifikasi sumber kontrak Solidity Equinox di Arbitrum Sepolia lewat Sourcify — tanpa API key, tanpa kunci, tanpa tx.
 # Alamat luar dari deployments/arbitrum-sepolia.json; alamat dalam dibaca on-chain (`factory()`, `factory.poolDeployer()`,
 # `pool.token()`, `pool.vol()`). Sourcify mencocokkan bytecode + metadata dari kompilasi lokal (foundry.toml: solc 0.8.28,
-# via-IR, 200 runs) sehingga argumen konstruktor tidak perlu dikirim — termasuk struct `EquinoxPool.Deploy` untuk kedua pool.
+# via-IR, 200 runs) sehingga argumen konstruktor tidak perlu dikirim — termasuk struct `EquinoxPool.Deploy` untuk setiap pool
+# (A, B, dan Pool C di atas USDG Paxos asli bila `pools.C` sudah ada di manifest).
 # Setiap kontrak dilaporkan sendiri-sendiri: `verified` (exact_match: metadata identik), `partial` (match: bytecode sama, metadata
 # beda), atau `failed: <alasan>`; kegagalan satu kontrak tidak menghentikan yang lain, dan skrip selalu keluar 0 (laporan, bukan gate).
 # Idempoten: kontrak yang sudah exact_match di Sourcify dilaporkan dari statusnya, tidak dikirim ulang; partial dikirim lagi.
@@ -29,7 +30,7 @@ lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
 j() { lower "$(jq -r "$1" "$DEP")"; }
 SOL=$(j .blackScholesSol); BENCH=$(j .bench)
 DEPLOYER=$(j .pools.deployer); USDG=$(j .pools.usdg); SEQ=$(j .pools.sequencerFeed)
-VOL=$(j .pools.vol); A=$(j .pools.A.pool); B=$(j .pools.B.pool)
+VOL=$(j .pools.vol); A=$(j .pools.A.pool); B=$(j .pools.B.pool); C=$(j '.pools.C.pool // empty')   # C kosong bila belum di-deploy
 [ "$DEPLOYER" != "null" ] || { echo "blok .pools belum ada di $DEP (jalankan deploy-pools.sh dulu)"; exit 1; }
 FACTORY=$(addr "$DEPLOYER" "factory()(address)") || { echo "gagal membaca factory() dari $DEPLOYER via $RPC"; exit 1; }
 POOL_DEPLOYER=$(addr "$FACTORY" "poolDeployer()(address)")
@@ -53,6 +54,16 @@ TARGETS=(
   "EquinoxOptionToken (A)|$TOK_A|src/pool/EquinoxOptionToken.sol:EquinoxOptionToken"
   "EquinoxPool (A, kontrol)|$A|src/pool/EquinoxPool.sol:EquinoxPool"
 )
+# Pool C (USDG Paxos asli, math Stylus, engine bersama) — bytecode sama dengan A/B; hanya bila sudah ada di manifest
+if [ -n "$C" ]; then
+  TOK_C=$(addr "$C" "token()(address)"); VOL_C=$(addr "$C" "vol()(address)")
+  [ "$VOL_C" == "$VOL" ] || echo "peringatan: vol() C=$VOL_C JSON=$VOL — engine tidak bersama?"
+  [ "$(j .pools.C.token)" == "$TOK_C" ] || echo "peringatan: token() C on-chain ≠ JSON"
+  TARGETS+=(
+    "EquinoxOptionToken (C)|$TOK_C|src/pool/EquinoxOptionToken.sol:EquinoxOptionToken"
+    "EquinoxPool (C, USDG asli)|$C|src/pool/EquinoxPool.sol:EquinoxPool"
+  )
+fi
 
 # status Sourcify v2: exact_match | match | null (belum) | error
 status() { curl -sS --max-time 30 "$SOURCIFY/v2/contract/$CHAIN/$1" | jq -r '.match // "null"' 2>/dev/null || echo "error"; }
