@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pool C — Equinox di atas USDG Paxos asli (Arbitrum Sepolia): pool identik dengan Pool B (math Stylus, engine vol bersama,
 # cfg sama) tetapi asset() = USDG 0xFFC9…1892 (faucet.paxos.com, 100 USDG/wallet/hari; mint tertutup). Tidak ada kontrak baru.
-# Pakai: tools/sepolia/pool-c.sh deploy | boards | seed [USDG=100] [--keeper] | trade [SIZE=0.01] | status
+# Pakai: tools/sepolia/pool-c.sh deploy | boards | seed [USDG=100] [--keeper] | redeem [USDG=10] | trade [SIZE=0.01] | status
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; source "$ROOT/tools/sepolia/lib.sh"
 USDG_REAL=0xFFC95faa3d63Cde504a05B567C600B78C0b41892
 FACTORY=$(addr "$(jq -r .pools.deployer "$DEP")" "factory()(address)")
@@ -62,6 +62,17 @@ seed)
   res=$(send "$C" "deposit(uint256,address)" "$UNITS" "$ME"); tx=${res%% *}; gas=${res##* }
   echo "deposit $AMT USDG → Pool C dari $ME: $(arbiscan "$tx") gas=$gas · shares $(num "$C" "balanceOf(address)(uint256)" "$ME") · NAV $(num "$C" "totalAssets()(uint256)") · capitalRefPrev $(num "$C" "capitalRefPrev()(uint256)")"
   ;;
+redeem)
+  # Owner saja (LP == owner kunci); tarik sebagian kapital LP kembali jadi USDG asli di wallet owner supaya wallet yang
+  # sama juga bisa jadi trader (bayar premi) — lihat catatan blokir di DEMO_LOG. UNITS dalam unit shares (6 dp), 1:1
+  # dengan aset selama belum ada P&L; maxRedeem/freeLiquidity dicek dulu, exit keras (die) bila kurang — tidak ada
+  # penyesuaian jumlah otomatis, sama seperti seed menolak jumlah lebih kecil sendiri.
+  need_c; AMT=${2:-10}; [[ "$AMT" =~ ^[0-9]+$ ]] || die "jumlah USDG bulat"; UNITS=$((AMT * 1000000))
+  [ "$(num "$C" "maxRedeem(address)(uint256)" "$ME")" -ge "$UNITS" ] || die "maxRedeem($ME) < $UNITS shares"
+  [ "$(num "$C" "freeLiquidity()(uint256)")" -ge "$UNITS" ] || die "freeLiquidity() < $UNITS"
+  res=$(send "$C" "redeem(uint256,address,address)" "$UNITS" "$ME" "$ME"); tx=${res%% *}; gas=${res##* }
+  echo "redeem $AMT USDG (shares) dari Pool C ke $ME: $(arbiscan "$tx") gas=$gas · shares sisa $(num "$C" "balanceOf(address)(uint256)" "$ME") · NAV $(num "$C" "totalAssets()(uint256)") · USDG asli owner $(num "$USDG_REAL" "balanceOf(address)(uint256)" "$ME")"
+  ;;
 trade)
   need_c; SIZE=${2:-0.01}; SW=$(python3 -c "print(int(round(float('$SIZE')*10**18)))")
   ID=$(jq -r '.pools.boards[1].seriesIds.C[2]' "$DEP"); [ "$ID" != "null" ] || die "board 1 belum ada di C — jalankan: $0 boards"   # C K1 board 1 (2 Okt)
@@ -83,5 +94,5 @@ status)
   echo "NAV $(num "$C" "totalAssets()(uint256)") · free $(num "$C" "freeLiquidity()(uint256)") · reserved $(num "$C" "reserved()(uint256)") · capitalRefPrev $(num "$C" "capitalRefPrev()(uint256)") · boards $(num "$C" "boardCount()(uint256)")"
   echo "USDG asli: owner $(num "$USDG_REAL" "balanceOf(address)(uint256)" "$ME") · keeper $(num "$USDG_REAL" "balanceOf(address)(uint256)" "${KEEPER_ADDRESS:-0x2e5607862E1c42C24Ea91d50C5737715a71ba89B}") · pool $(num "$USDG_REAL" "balanceOf(address)(uint256)" "$C")"
   ;;
-*) echo "pakai: $0 deploy | boards | seed [USDG] [--keeper] | trade [SIZE] | status"; exit 2 ;;
+*) echo "pakai: $0 deploy | boards | seed [USDG] [--keeper] | redeem [USDG] | trade [SIZE] | status"; exit 2 ;;
 esac
