@@ -1,0 +1,19 @@
+name: keeper
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # hanya aktif di branch default (main)
+  workflow_dispatch:
+permissions: { contents: read }
+concurrency: { group: keeper, cancel-in-progress: false }
+jobs:
+  keeper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: poke + settle (Arbitrum Sepolia)
+        env:
+          KEEPER_PRIVATE_KEY: ${{ secrets.KEEPER_PRIVATE_KEY }}
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        run: tools/keeper/keeper.sh deployments/arbitrum-sepolia.json
