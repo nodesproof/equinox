@@ -7,7 +7,7 @@
 > The live identity claim is therefore **math parity** (decision K5): both `math` contracts return byte-identical prices for identical inputs (S, K, t, σ) — `tools/bench/onchain-check.sh` 20/20, the dashboard's Parity column per series, and `sepolia-demo.sh --check` (read-only) — not byte-identical pool quotes; the demo script compares pool quotes byte-for-byte only when both pools carry identical inventory at that block, otherwise it prints the Δ.
 > State rows are read at one block (310703512): `reserved` (16,400 USDG) and `escrowedPayouts` (0) equal on A and B; `totalAssets`/`freeLiquidity` differ by a few hundred 1e-6 units and `netVega` by the timestamp skew of sequential transactions, not by the model.
 > Next entry: the first real settlement of board 0 (Fri 25 Sep 2026 08:00 UTC — scheduled, not done yet) and `--claim`, which appends settlement prices, transactions and payouts here.
-> **Pool C (20 Sep 2026 13:57 UTC, section below):** a third pool identical to Pool B (same Stylus math, same shared engine, same config) but whose asset is the **real Paxos USDG on Arbitrum Sepolia** (`0xFFC95faa3d63Cde504a05B567C600B78C0b41892`, 6 dp, Sourcify exact match), created through the existing factory in one transaction (4,976,404 gas) plus the same two boards (25 Sep, 2 Oct). Its `mint` is permissioned and the Paxos faucet gives 100 USDG per wallet per day, so Pool C runs at a scale of hundreds of USDG; the seed deposit and the first trade in real USDG are not done yet and will be logged as their own entries.
+> **Pool C (20 Sep 2026 13:57 UTC, section below):** a third pool identical to Pool B (same Stylus math, same shared engine, same config) but whose asset is the **real Paxos USDG on Arbitrum Sepolia** (`0xFFC95faa3d63Cde504a05B567C600B78C0b41892`, 6 dp, Sourcify exact match), created through the existing factory in one transaction (4,976,404 gas) plus the same two boards (25 Sep, 2 Oct). Its `mint` is permissioned and the Paxos faucet gives 100 USDG per wallet per day, so Pool C runs at a scale of hundreds of USDG. The 100 USDG seed deposit is done (two real transactions; NAV 100 USDG, `capitalRefPrev` bootstrapped); the first trade is **blocked**, not by a bug but by the faucet cap itself — the owner wallet is both the sole LP and the sole trader here, and depositing its whole 100 USDG faucet allowance as LP capital left 0 USDG in that same wallet to pay an option premium, so `buy()` reverts with the token's own `InsufficientFunds()` (no transaction was broadcast — only the pre-flight simulation reverted). Waits on a second wallet or a fresh day's faucet request for the trader side; logged below.
 
 Setiap bagian = satu run `tools/demo/sepolia-demo.sh`. Pool A = kontrol `BlackScholesSol`, Pool B = Stylus; engine σ bersama (K4). Tautan = Arbiscan Sepolia.
 
@@ -56,4 +56,32 @@ NAV 0 · free 0 · reserved 0 · capitalRefPrev 0 · boards 2
 USDG asli: owner 100000000 · keeper 0 · pool 0
 ```
 
-Jujur soal skala: seed dan trade pertama **belum** dijalankan (entri berikutnya). Saldo owner 100 USDG (100.000.000 unit 6 dp) dari satu permintaan faucet; wallet keeper 0 USDG — LP kedua menunggu permintaan faucet harian berikutnya. Dengan batas 100 USDG/wallet/hari, Pool C berskala **ratusan USDG** — bukti "aset asli", bukan demo utama; kapital demo (1.000.000 USDG per pool) tetap di Pool A/B dengan mock.
+### Seed — 100 USDG asli dari owner (20 Sep 2026 14:12–14:13 UTC)
+
+`tools/sepolia/pool-c.sh seed 100` dari owner. Allowance USDG asli owner → Pool C masih 0, jadi skrip mengirim `approve` dulu, baru `deposit`:
+
+| Langkah | Tx | Gas | Blok (UTC) |
+|---|---|---|---|
+| `approve(Pool C, MAX)` | [0xa80a97c2…04872](https://sepolia.arbiscan.io/tx/0xa80a97c25bbc03959b9b1a18ecd7fed22d7178521bc488ba3202e6c1d7c04872) | 58.325 | 310894714 (14:12:57) |
+| `deposit(100000000, owner)` — 100 USDG | [0x96efa81f…c1da3](https://sepolia.arbiscan.io/tx/0x96efa81f0038e99ac3af299caf03689b1dd70a5744a3548d3e51cb75e8bc1da3) | 390.963 | 310894728 (14:13:00) |
+
+Setelah `deposit`: `shares` owner 100000000 (1:1 — deposit pertama), `NAV` (`totalAssets`) 100000000 (100 USDG), `capitalRefPrev` 100000000000000000000 (1e20 = 100 USDG dalam WAD — `_bootstrapCapitalRef` jalan seketika di deposit pertama, sama seperti A/B), `reserved` masih 0. Ini murni kapital LP; premi belum dibayar siapa pun pada titik ini.
+
+### Trade pertama — diblokir oleh batas faucet, bukan bug (20 Sep 2026 14:20 UTC)
+
+`tools/sepolia/pool-c.sh trade 0.01` mencoba beli lalu tutup 0,01 unit C K1 (strike 2600, board 1, expiry 2 Okt) di Pool C. `quoteBuy` (view, blok 310896537): premi 1,225719 USDG + fee 0,036772 USDG (σ_buy 0,731842, S 2.573,672369 USD) — tapi simulasi jalur eksekusi (`buy` lewat `eth_call --from owner`, dipakai skrip untuk menghitung batas kirim *sebelum* tx nyata dikirim, sesuai catatan brief bahwa `buy`/`close` men-poke vol engine dulu) **revert** dengan `data 0x356680b7`. Selector itu adalah `InsufficientFunds()` — error kustom milik token USDG sendiri, bukan `EquinoxPool` (dicocokkan dari ABI facet implementasi USDG `0x0643bc7146aB7a2dd4Ea10d506bA95e1b933b236` via Sourcify v2, dikonfirmasi silang di openchain.xyz dan 4byte.directory).
+
+Akar masalah: di demo ini owner adalah LP **dan** trader yang sama. Seed di atas menyetor seluruh 100 USDG (batas faucet 100/wallet/hari) sebagai kapital LP, sehingga saldo USDG asli milik owner sendiri sekarang **0** (`balanceOf(owner)` = 0; allowance ke Pool C tetap MAX − 100000000, tidak jadi terpakai). `buy()` menarik premi dari `msg.sender` lewat `transferFrom` — 0 saldo < ~1,26 USDG premi → revert. **Tidak ada transaksi nyata yang terkirim**: nonce owner tetap 284 sebelum dan sesudah percobaan ini; hanya panggilan simulasi baca (`cast call`, tanpa gas nyata) yang revert. Sesuai batasan tugas ("jangan retry buta"), percobaan dihentikan di sini — tidak ada perubahan ukuran trade atau tx susulan yang dikirim.
+
+`tools/sepolia/pool-c.sh status` dan `tools/demo/sepolia-demo.sh --check` (read-only, A/B) sesudahnya:
+
+```
+Pool C 0xebd255c8324dce0478996d9d40d6642044872e92 · asset 0xffc95faa3d63cde504a05b567c600b78c0b41892 · math 0xb3b37050a40b9755001bddd29cc5df17a59f51d4 · vol 0xc331031a1730a567fd9149d5950912a1cdcb6a3e
+cfg C == cfg B: ya
+NAV 100000000 · free 100000000 · reserved 0 · capitalRefPrev 100000000000000000000 · boards 2
+USDG asli: owner 0 · keeper 0 · pool 100000000
+```
+
+`--check` blok 310895991 tetap hijau untuk A/B: paritas math byte-identik, kuotasi A vs B berbeda hanya karena inventaris (seperti run-run sebelumnya) — Pool C tidak menyentuh A/B.
+
+Jujur soal skala dan status: seed 100 USDG **selesai** (dua tx nyata, tabel di atas); trade pertama dalam USDG asli **belum** — diblokir oleh batas faucet itu sendiri (bukan oleh kontrak, bukan oleh skrip). Wallet keeper masih 0 USDG — LP kedua menunggu permintaan faucet hariannya sendiri. Jalan ke depan: begitu ada saldo USDG asli terpisah untuk sisi trader (mis. wallet lain, atau owner di hari faucet berikutnya), entri `buy`/`close` akan menyusul di sini. Kapital demo utama (1.000.000 USDG per pool) tetap di Pool A/B dengan mock.
