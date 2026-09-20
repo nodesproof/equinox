@@ -30,12 +30,12 @@ Sequencer mock: `MockSequencerFeed.set(int256,uint256)` (`.pools.sequencerFeed`)
 ## Setelah settlement (25 Sep, siang)
 
 1. `tools/demo/sepolia-demo.sh --claim` (board 0) dari owner → baris settle (bila keeper belum), harga settlement A/B, payout C 2800 & P 2400 ke `docs/DEMO_LOG.md`; commit log-nya.
-2. **List board 9 Okt** (`1791532800` = Jum 9 Okt 2026 08:00 UTC, grid Jumat ✓) di kedua pool supaya masih ada seri terbuka setelah board 1 (2 Okt) expiry — sebelum 2 Okt:
-   `tools/sepolia/list-boards.sh 1791532800:K1,K2,K3` — strike naik & unik, kelipatan 1 USDG, **di dalam `[S/2, 2S]` pada saat listing** (S ≈ 2.600 → mis. `2200,2600,3000`; cek `spot()` dulu), tenor ≤ 30 hari ✓. Skrip idempoten (seed LP dilewati bila sudah ada), menulis `seriesIds`/`listTx` ke `deployments/arbitrum-sepolia.json` → commit JSON-nya (keeper membaca daftar board dari sana; board 2 Okt disettle cron 2 Okt 08:00 dengan cara yang sama).
+2. **List board 9 Okt dan 16 Okt** (`1791532800` = Jum 9 Okt 2026 08:00 UTC dan `1792137600` = Jum 16 Okt 2026 08:00 UTC — keduanya grid Jumat ✓, tenor 14/21 hari ≤ 30 hari dari 25 Sep ✓; sama dengan `DEMO_RUNBOOK.md` › Timeline 09:00) di kedua pool supaya masih ada seri terbuka setelah board 1 (2 Okt) expiry dan sampai `rewardTime` HackQuest (12 Okt) — sebelum 2 Okt:
+   `tools/sepolia/list-boards.sh 1791532800:K1,K2,K3 1792137600:K1,K2,K3` — strike naik & unik, kelipatan 1 USDG, **di dalam `[S/2, 2S]` pada saat listing** (S ≈ 2.600 → mis. `2300,2600,2900`; cek `spot()` dulu). Seri terbuka sesudahnya: 6 (board 1) + 12 = 18 ≤ 32 (`maxOpenSeries`). Skrip idempoten (seed LP dilewati bila sudah ada), menulis `seriesIds`/`listTx` ke `deployments/arbitrum-sepolia.json` → commit JSON-nya (keeper membaca daftar board dari sana; Pages dibangun ulang lewat pemicu `deployments/**`; board 2 Okt dan 9 Okt disettle cron pada expiry masing-masing dengan cara yang sama; test web bebas dari jumlah board).
 3. Setelah 2 Okt: `--claim 1` (indeks board 1) untuk posisi board 2 Okt bila ada.
 
 ## Top-up keeper ≈ 5–6 Okt
 
 Saldo 20 Sep setelah run ini: 0,019977 ETH. Satu run jalur `poke` penuh = 82.815 gas × ≈ 0,136 gwei ≈ 1,13 × 10⁻⁵ ETH (tx `0x7e5b90d8…`); 96 run/hari → ≈ 1,1 × 10⁻³ ETH/hari → **runway ≈ 18 hari dari 20 Sep** (habis ≈ 8 Okt; no-op poke lebih murah, settle sedikit lebih mahal). Kirim ≈ 0,02 Sepolia ETH ke `0x2e5607862E1c42C24Ea91d50C5737715a71ba89B` pada 5–6 Okt bila cron dibiarkan berjalan; saldo tercetak di baris pertama tiap run (`saldo … ETH`).
 
-Catatan `--check`: sejak 60 s sebelum expiry board 0 (Jum 25 Sep 07:59 UTC) `quoteBuy` seri board 0 revert `SeriesExpired`, jadi pakai `tools/demo/sepolia-demo.sh --check 1` (board 2 Okt) sampai board 9 Okt terdaftar.
+Catatan `--check`: sejak 60 s sebelum expiry board 0 (Jum 25 Sep 07:59 UTC) `quoteBuy` seri board 0 revert `SeriesExpired`, jadi pakai `tools/demo/sepolia-demo.sh --check 1` (board 2 Okt) sampai board 9/16 Okt terdaftar.
