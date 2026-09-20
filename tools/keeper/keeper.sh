@@ -53,7 +53,7 @@ if [ "$DRY" == "1" ]; then echo "poke (simulasi): $(cast call --rpc-url "$RPC" -
 elif res=$(ksend "$VOL" "poke()"); then echo "poke: $res lastRoundId=$(num "$VOL" "lastRoundId()(uint80)")"
 else echo "poke GAGAL — lanjut ke settle"; fi
 # --- sequencer mock: `MockSequencerFeed.set()` permissionless (artefak testnet) — siapa pun bisa menandai "down" (answer 1) atau
-#     memasang ulang grace 3600 s, yang membuat settle revert SettlementNotReady/OracleStale dan memblokir kuotasi/deposit sampai
+#     memasang ulang grace 3600 s, yang membuat settle revert SettlementNotReady (kuotasi/deposit: OracleStale) dan memblokir sampai
 #     di-reset. Predikat = OracleLib.sequencerUp: answer == 0, startedAt ∈ (0, now], now − startedAt ≥ grace; selain itu pulihkan. ---
 seq_heal() {
   local SQ ANS ST res
@@ -64,7 +64,7 @@ seq_heal() {
   echo "!! sequencer mock: answer=$ANS startedAt=$ST (umur $((NOW - ST)) s) — kuotasi/settle terblokir; pulihkan: set(0, $((NOW - 7200)))"
   if [ "$DRY" == "1" ]; then echo "sequencer set (simulasi): $SEQ set(int256,uint256) 0 $((NOW - 7200))"
   elif res=$(ksend "$SEQ" "set(int256,uint256)" 0 $((NOW - 7200))); then echo "sequencer set: $res"
-  else echo "sequencer set GAGAL — lanjut (settle akan revert SettlementNotReady/OracleStale)"; fi
+  else echo "sequencer set GAGAL — lanjut (settle akan revert SettlementNotReady)"; fi
 }
 seq_heal || echo "sequencer mock: gagal dibaca — lanjut"
 # --- settle board yang sudah expiry: pre-flight `cast call` (nama error bila belum bisa) → ksend; gagal → board/pool berikutnya ---

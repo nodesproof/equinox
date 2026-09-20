@@ -25,7 +25,7 @@ Selektor revert yang dinamai keeper: `BoardNotExpired`, `SettlementNotReady`, `B
 2. Lokal dari wallet keeper: `set -a; source .env; set +a; tools/keeper/keeper.sh` (kunci hanya dari `.env`, tidak pernah dicetak).
 3. Dari owner (settle permissionless): `tools/demo/sepolia-demo.sh --claim` — settle bila belum, lalu claim; tidak bergantung pada keeper.
 
-Sequencer mock: `MockSequencerFeed.set(int256,uint256)` (`.pools.sequencerFeed`) **terbuka** — artefak testnet. Siapa pun bisa menandai "down" atau memasang ulang grace 3600 s, yang membuat `settle` revert `SettlementNotReady`/`OracleStale` dan memblokir kuotasi/deposit. Keeper dan `--claim` memeriksanya lebih dulu (`answer == 0`, `startedAt ∈ (0, now]`, `now − startedAt ≥ 3600`) dan memulihkan dengan `set(0, now − 7200)` bila perlu; manual: `cast send $SEQ "set(int256,uint256)" 0 $(( $(date -u +%s) - 7200 ))`.
+Sequencer mock: `MockSequencerFeed.set(int256,uint256)` (`.pools.sequencerFeed`) **terbuka** — artefak testnet. Siapa pun bisa menandai "down" atau memasang ulang grace 3600 s, yang membuat `settle` revert `SettlementNotReady` dan kuotasi/deposit revert `OracleStale`. Keeper dan `--claim` memeriksanya lebih dulu (`answer == 0`, `startedAt ∈ (0, now]`, `now − startedAt ≥ 3600`) dan memulihkan dengan `set(0, now − 7200)` bila perlu; manual: `cast send $SEQ "set(int256,uint256)" 0 $(( $(date -u +%s) - 7200 ))`.
 
 ## Setelah settlement (25 Sep, siang)
 
@@ -37,3 +37,5 @@ Sequencer mock: `MockSequencerFeed.set(int256,uint256)` (`.pools.sequencerFeed`)
 ## Top-up keeper ≈ 5–6 Okt
 
 Saldo 20 Sep setelah run ini: 0,019977 ETH. Satu run jalur `poke` penuh = 82.815 gas × ≈ 0,136 gwei ≈ 1,13 × 10⁻⁵ ETH (tx `0x7e5b90d8…`); 96 run/hari → ≈ 1,1 × 10⁻³ ETH/hari → **runway ≈ 18 hari dari 20 Sep** (habis ≈ 8 Okt; no-op poke lebih murah, settle sedikit lebih mahal). Kirim ≈ 0,02 Sepolia ETH ke `0x2e5607862E1c42C24Ea91d50C5737715a71ba89B` pada 5–6 Okt bila cron dibiarkan berjalan; saldo tercetak di baris pertama tiap run (`saldo … ETH`).
+
+Catatan `--check`: sejak 60 s sebelum expiry board 0 (Jum 25 Sep 07:59 UTC) `quoteBuy` seri board 0 revert `SeriesExpired`, jadi pakai `tools/demo/sepolia-demo.sh --check 1` (board 2 Okt) sampai board 9 Okt terdaftar.

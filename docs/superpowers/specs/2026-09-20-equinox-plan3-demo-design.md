@@ -92,7 +92,7 @@ Langkah pasca-settlement (dijalankan terpisah setelah 25 Sep 08:00 UTC, `sepolia
 Skrip memakai `cast send` sekuensial; peringatan skew timestamp A/B (lihat BENCHMARK) berlaku — kuotasi diambil pada blok yang sama lewat `cast call --block`.
 
 ### 3.6 Narasi deterministik — `contracts/test/Narrative.t.sol`
-Test Foundry pada Pool A (kontrol) yang **mencetak** tabel §13 dengan `console2.log`: LP deposit 1.000.000 → `quoteBuy` 10 C 4.200 (mid dari `cappedCall` pada σ_mark(0) = 64,87/unit vs harga beli; σ_mark) → `buy` → `buy` P 2.600 (floor menang) → `vm.warp` 7 hari → `tick(4500e8)` → `settle` → `claim` 10 × 300 = 3.000 → NAV LP = 1.000.000 + premi − 3.000 (fee ke treasury tidak masuk NAV). Assert angka cocok dengan §6.7 dan `test_scenario1_settle_claim_nav`; dijalankan `forge test --match-contract Narrative -vv` untuk video. Tidak mengubah kontrak.
+Test Foundry pada Pool A (kontrol) yang **mencetak** tabel §13 dengan `console2.log`: LP deposit 1.000.000 → `quoteBuy` 10 C 4.200 (mid dari `cappedCall` pada σ_mark(0) = 64,87/unit vs harga beli; σ_mark) → `buy` → `buy` P 2.600 (floor menang) → `vm.warp` 7 hari → `tick(4500e8)` → `settle` → `claim` 10 × 300 = 3.000 → NAV LP = 1.000.000 + premi − 3.000 − bounty 2 (fee ke treasury tidak masuk NAV). Assert angka cocok dengan §6.7 dan `test_scenario1_settle_claim_nav`; dijalankan `forge test --match-contract Narrative -vv` untuk video. Tidak mengubah kontrak.
 
 ### 3.7 Kriteria terima Plan 3a
 - `forge test` hijau (+ test deployer & Narrative); `forge build --sizes` hijau.
