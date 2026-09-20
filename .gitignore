@@ -7,3 +7,4 @@ __pycache__/
 *.pyc
 deployments/devnode.json
 tools/devnode/.nitro-devnode/
+web/dist/
