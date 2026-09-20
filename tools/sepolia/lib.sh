@@ -16,6 +16,10 @@ die() { echo "GAGAL: $*" >&2; exit 1; }
 addr() { cast call --rpc-url "$RPC" "$1" "$2" "${@:3}" | awk '{print tolower($1)}'; }
 # angka tanpa anotasi [1.2e3]
 num() { cast call --rpc-url "$RPC" "$1" "$2" "${@:3}" | awk '{print $1}'; }
+# sama, di-pin pada blok: numat BLK addr sig args…
+numat() { cast call --rpc-url "$RPC" --block "$1" "$2" "$3" "${@:4}" | awk '{print $1}'; }
+# field ke-i (1-based) dari tuple cast "(a [x], b [y], …)", tanpa anotasi
+field() { tr -d '()' <<< "$1" | awk -F', ' -v i="$2" '{print $i}' | awk '{print $1}'; }
 # kirim tx; cetak "txhash gasUsed"; gagal keras bila revert. Pakai lewat command substitution — res=$(send …) —
 # supaya kegagalan menghentikan skrip (errexit); JANGAN lewat process substitution (< <(send …)), yang menelan exit code.
 # Gas limit = 1,5 × eth_estimateGas: estimasi Nitro adalah gas minimum tanpa margin, dan gas minimum `buy`/`close`
