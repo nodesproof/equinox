@@ -1,11 +1,11 @@
 // panels/trade.ts — panel Trade: connect wallet, faucet, approve, deposit/redeem, buy/close/claim; setiap aksi simulate → write → log.
-import { parseUnits, type Address } from 'viem';
+import { formatUnits, parseUnits, type Address } from 'viem';
 import { el, setText } from '../ui/dom';
 import { shortAddr, shortHash, usdg, usdg6, wad } from '../ui/format';
 import { ALL_SERIES, POOLS, POOL_KEYS, explorerAddress, explorerTx, type PoolKey } from '../deployment';
 import { chain, client } from '../chain/client';
 import { equinoxPoolAbi } from '../abi/equinoxPool';
-import { connect, decodeRevert, ensureChain, hasWallet, onWalletEvents, write } from '../chain/wallet';
+import { TxFailed, connect, decodeRevert, ensureChain, hasWallet, onWalletEvents, write } from '../chain/wallet';
 import {
   ALLOWANCE_MIN, FAUCET_AMOUNT, MIN_SIZE, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds, redeemCall, seriesLabel,
   type TradeCall,
@@ -90,7 +90,8 @@ export function createTrade(): TradePanel {
     el('div', { class: 'header-right' }, connectBtn, who), summary, hasWallet() ? gasNote : noWallet, form, log);
 
   // --- helpers ---
-  const poolCall = () => ({ address: POOLS[pool].pool, abi: equinoxPoolAbi } as const);
+  const poolCallOf = (k: PoolKey) => ({ address: POOLS[k].pool, abi: equinoxPoolAbi } as const);
+  const poolCall = () => poolCallOf(pool);
   const user = () => (last && account && last.user && last.user.address.toLowerCase() === account.toLowerCase() ? last.user : null);
   const openRows = () => (last ? last.series.map((r, i) => ({ r, i })).filter(({ r }) => !r[pool].settled && r.ref.expiry > last!.blockTime + 60) : []);
   const heldRows = (settled: boolean) => {
@@ -108,19 +109,21 @@ export function createTrade(): TradePanel {
     sel.replaceChildren(...(rows.length ? rows.map(({ i, text }) => opt(String(i), text, String(i) === prev)) : [opt('', empty)]));
     if (rows.length && !rows.some(({ i }) => String(i) === prev)) sel.selectedIndex = 0;
   }
+  /** `✓ what — tx 0x… ↗` bila sukses; `✗ what — pesan` bila gagal, ditambah tautan explorer bila tx-nya sempat terkirim (status 0 / timeout). */
   function logLine(ok: boolean, what: string, tail: string, hash?: `0x${string}`) {
     if (log.firstElementChild?.classList.contains('muted')) log.replaceChildren();
-    const line = el('div', { class: ok ? 'ok' : 'bad' }, `${ok ? '✓' : '✗'} ${what} — `,
-      hash ? el('a', { href: explorerTx(hash), target: '_blank', rel: 'noopener', text: `tx ${shortHash(hash)} ↗` }) : el('span', { class: 'muted', text: tail }));
+    const link = hash ? el('a', { href: explorerTx(hash), target: '_blank', rel: 'noopener', text: `tx ${shortHash(hash)} ↗` }) : null;
+    const line = el('div', { class: ok ? 'ok' : 'bad' }, `${ok ? '✓' : '✗'} ${what} — `, tail ? el('span', { class: 'muted', text: tail }) : null, tail && link ? ' ' : null, link);
     log.prepend(line);
     while (log.childElementCount > MAX_LOG) log.lastElementChild?.remove();
   }
-  /** Satu aksi: bangun call (boleh membaca quote segar) → write (simulate → wallet → receipt) → log → onChange. */
-  async function run(what: string, build: () => Promise<TradeCall> | TradeCall) {
-    if (!account || busy) return;
+  /** Satu aksi: `acct`/`k` ditangkap pemanggil saat klik (bukan dibaca ulang setelah await) → bangun call (boleh membaca quote segar) →
+   *  write (simulate → wallet → receipt) → log → onChange. Tx yang terkirim tapi gagal/timeout tetap dicatat dengan tautannya. */
+  async function run(what: string, acct: Address, k: PoolKey, build: (k: PoolKey, acct: Address) => Promise<TradeCall> | TradeCall) {
+    if (busy) return;
     busy = true; paintEnabled();
-    try { const hash = await write(await build(), account); logLine(true, what, '', hash); }
-    catch (e) { logLine(false, what, decodeRevert(e)); }
+    try { const hash = await write(await build(k, acct), acct); logLine(true, what, '', hash); }
+    catch (e) { logLine(false, what, decodeRevert(e), e instanceof TxFailed ? e.hash : undefined); }
     finally { busy = false; paintEnabled(); hooks.onChange(); }
   }
 
@@ -189,6 +192,7 @@ export function createTrade(): TradePanel {
   function paintEnabled() {
     const can = hasWallet() && account !== null && !wrongChain && !busy;
     for (const b of [faucetBtn, approveBtn, depositBtn, redeemBtn, buyBtn, closeBtn, claimBtn]) b.disabled = !can;
+    for (const r of radios) r.disabled = busy;
     redeemMax.disabled = !user();
     connectBtn.classList.toggle('hidden', !hasWallet() || (account !== null && !wrongChain));
     setText(connectBtn, wrongChain ? 'Switch to Arbitrum Sepolia' : 'Connect wallet');
@@ -220,47 +224,62 @@ export function createTrade(): TradePanel {
   radios.forEach((r) => r.addEventListener('change', () => { if (r.checked) { pool = r.value as PoolKey; paintSnapshot(); previews(); } }));
   depositIn.addEventListener('input', () => debounce('deposit', () => void previewDeposit()));
   redeemIn.addEventListener('input', () => debounce('redeem', () => void previewRedeem()));
-  redeemMax.addEventListener('click', () => { const u = user(); if (u) { redeemIn.value = usdg6(u.shares[pool]); void previewRedeem(); } });
+  redeemMax.addEventListener('click', () => { const u = user(); if (u) { redeemIn.value = formatUnits(u.shares[pool], 6); void previewRedeem(); } });
   buySel.addEventListener('change', () => void previewBuy());
   buyIn.addEventListener('input', () => debounce('buy', () => void previewBuy()));
   closeSel.addEventListener('change', () => void previewClose());
   closeIn.addEventListener('input', () => debounce('close', () => void previewClose()));
   claimSel.addEventListener('change', previewClaim);
 
-  faucetBtn.addEventListener('click', () => void run(`faucet ${usdg(FAUCET_AMOUNT, 0)} USDG`, () => faucetCall(account!)));
-  approveBtn.addEventListener('click', () => void run(`approve USDG for ${pool}`, () => approveCall(pool)));
+  // Setiap handler menangkap pool dan akun SAAT KLIK (k, acct) sebelum await apa pun; penjaga ukuran dijalankan sebelum RPC mana pun.
+  faucetBtn.addEventListener('click', () => {
+    const k = pool, acct = account; if (!acct) return;
+    void run(`faucet ${usdg(FAUCET_AMOUNT, 0)} USDG`, acct, k, (_k, a) => faucetCall(a));
+  });
+  approveBtn.addEventListener('click', () => {
+    const k = pool, acct = account; if (!acct) return;
+    void run(`approve USDG for ${k}`, acct, k, (kk) => approveCall(kk));
+  });
   depositBtn.addEventListener('click', () => {
+    const k = pool, acct = account; if (!acct) return;
     const assets = parse(depositIn.value, 6); if (!assets) return setText(depositPrev, 'enter a USDG amount');
-    void run(`deposit ${usdg(assets)} USDG into ${pool}`, () => depositCall(pool, assets, account!));
+    void run(`deposit ${usdg(assets)} USDG into ${k}`, acct, k, (kk, a) => depositCall(kk, assets, a));
   });
   redeemBtn.addEventListener('click', () => {
+    const k = pool, acct = account; if (!acct) return;
     const shares = parse(redeemIn.value, 6); if (!shares) return setText(redeemPrev, 'enter a share amount');
-    void run(`redeem ${usdg6(shares)} shares from ${pool}`, () => redeemCall(pool, shares, account!));
+    void run(`redeem ${usdg6(shares)} shares from ${k}`, acct, k, (kk, a) => redeemCall(kk, shares, a));
   });
   buyBtn.addEventListener('click', () => {
+    const k = pool, acct = account; if (!acct) return;
     const i = selected(buySel), size = parse(buyIn.value, 18);
     if (i === null || !size) return setText(buyPrev, 'pick a series and a size');
-    const ref = ALL_SERIES[i]!;
+    const ref = ALL_SERIES[i]!, what = `buy ${wad(size, size < MIN_SIZE ? 4 : 2)} ${seriesLabel(ref)} on ${k}`;
+    if (size < MIN_SIZE) return logLine(false, what, 'Minimum size is 0.01 units.');
     // Quote segar tepat sebelum tulis: maxPremium = (premi + fee) × 1,01 dari blok terbaru, bukan dari pratinjau yang mungkin sudah tua.
-    void run(`buy ${wad(size, 2)} ${seriesLabel(ref)} on ${pool}`, async () => {
-      const q = await client.readContract({ ...poolCall(), functionName: 'quoteBuy', args: [ref.id[pool], size] });
-      return buyCall(pool, ref.id[pool], size, q.premiumAssets, q.feeAssets);
+    void run(what, acct, k, async (kk) => {
+      const q = await client.readContract({ ...poolCallOf(kk), functionName: 'quoteBuy', args: [ref.id[kk], size] });
+      return buyCall(kk, ref.id[kk], size, q.premiumAssets, q.feeAssets);
     });
   });
   closeBtn.addEventListener('click', () => {
+    const k = pool, acct = account; if (!acct) return;
     const i = selected(closeSel), size = parse(closeIn.value, 18);
     if (i === null || !size) return setText(closePrev, 'pick a position and a size');
-    const ref = ALL_SERIES[i]!;
-    void run(`close ${wad(size, 2)} ${seriesLabel(ref)} on ${pool}`, async () => {
-      const [proceeds] = await client.readContract({ ...poolCall(), functionName: 'quoteClose', args: [ref.id[pool], size] });
-      return closeCall(pool, ref.id[pool], size, proceeds);
+    const ref = ALL_SERIES[i]!, what = `close ${wad(size, 2)} ${seriesLabel(ref)} on ${k}`;
+    const pos = user()?.positions[k][i] ?? 0n;
+    if (size > pos) return logLine(false, what, `size exceeds your position (${wad(pos, 2)} units)`);
+    void run(what, acct, k, async (kk) => {
+      const [proceeds] = await client.readContract({ ...poolCallOf(kk), functionName: 'quoteClose', args: [ref.id[kk], size] });
+      return closeCall(kk, ref.id[kk], size, proceeds);
     });
   });
   claimBtn.addEventListener('click', () => {
-    const i = selected(claimSel), pos = i === null ? 0n : (user()?.positions[pool][i] ?? 0n);
+    const k = pool, acct = account; if (!acct) return;
+    const i = selected(claimSel), pos = i === null ? 0n : (user()?.positions[k][i] ?? 0n);
     if (i === null || pos === 0n) return setText(claimPrev, 'nothing to claim');
     const ref = ALL_SERIES[i]!;
-    void run(`claim ${wad(pos, 2)} ${seriesLabel(ref)} on ${pool}`, () => claimCall(pool, ref.id[pool], pos));
+    void run(`claim ${wad(pos, 2)} ${seriesLabel(ref)} on ${k}`, acct, k, (kk) => claimCall(kk, ref.id[kk], pos));
   });
 
   paintSnapshot(); paintEnabled();

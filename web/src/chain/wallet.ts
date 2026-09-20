@@ -1,7 +1,16 @@
 // wallet.ts — wallet injected (MetaMask) di Arbitrum Sepolia: connect, pastikan chain, simulate → write → tunggu receipt, dekode revert.
-import { BaseError, ContractFunctionRevertedError, createWalletClient, custom, getAddress, type Address, type Hash } from 'viem';
+import {
+  BaseError, ContractFunctionRevertedError, WaitForTransactionReceiptTimeoutError, createWalletClient, custom, getAddress, type Address, type Hash,
+} from 'viem';
 import { chain, client } from './client';
 import { REVERT_TEXT, type TradeCall } from './trade';
+
+/** Selector error yang tidak ada di ABI pool tetapi bisa menggelembung dari kontrak lain yang dipanggil pool (token ERC-1155 saat close/claim). */
+export const REVERT_SELECTOR: Record<string, string> = { '0x03dee4c5': 'ERC1155InsufficientBalance' };
+/** Tx yang sudah terkirim tetapi gagal (status 0) atau belum terkonfirmasi sampai timeout — hash disimpan agar log tetap punya tautan explorer. */
+export class TxFailed extends Error {
+  constructor(message: string, readonly hash: Hash) { super(message); this.name = 'TxFailed'; }
+}
 
 export function hasWallet(): boolean { return typeof window !== 'undefined' && !!window.ethereum; }
 export function walletClient() {
@@ -14,19 +23,31 @@ export async function connect(): Promise<Address> {
   await ensureChain();
   return a;
 }
-/** Pindah ke Arbitrum Sepolia; bila wallet belum mengenal chain-nya, tambahkan (wallet_addEthereumChain) lalu pindah. */
+/** Kode EIP-1193 dari error viem (RpcError.code) atau objek provider mentah. */
+function rpcCode(e: unknown): number | undefined {
+  const code = (x: unknown) => (x && typeof x === 'object' && typeof (x as { code?: unknown }).code === 'number' ? (x as { code: number }).code : undefined);
+  if (e instanceof BaseError) { const hit = e.walk((x) => code(x) !== undefined); return code(hit); }
+  return code(e);
+}
+/** Pindah ke Arbitrum Sepolia. 4902 (chain tak dikenal) → tambahkan lalu pindah; 4001 (ditolak) → pesan tanpa prompt lanjutan; lainnya diteruskan. */
 export async function ensureChain(): Promise<void> {
   const w = walletClient();
   const id = await w.getChainId();
   if (id === chain.id) return;
-  try { await w.switchChain({ id: chain.id }); } catch { await w.addChain({ chain }); await w.switchChain({ id: chain.id }); }
+  try { await w.switchChain({ id: chain.id }); }
+  catch (e) {
+    const code = rpcCode(e);
+    if (code === 4902) { await w.addChain({ chain }); await w.switchChain({ id: chain.id }); return; }
+    if (code === 4001) throw new Error('Switch to Arbitrum Sepolia to continue');
+    throw e;
+  }
 }
-/** Nama custom error dari ABI → pesan manusiawi (REVERT_TEXT); selain itu shortMessage viem (mis. "User rejected the request."). */
+/** Nama custom error dari ABI (atau selector yang dikenal) → pesan manusiawi (REVERT_TEXT); selain itu shortMessage viem (mis. "User rejected the request."). */
 export function decodeRevert(e: unknown): string {
   if (e instanceof BaseError) {
     const r = e.walk((x) => x instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
     if (r) {
-      const name = r.data?.errorName;
+      const name = r.data?.errorName ?? (r.signature ? REVERT_SELECTOR[r.signature] : undefined);
       if (name) return REVERT_TEXT[name] ?? `Reverted: ${name}`;
       if (r.reason) return `Reverted: ${r.reason}`;
       if (r.signature) return `Reverted: ${r.signature}`;
@@ -39,9 +60,18 @@ export function decodeRevert(e: unknown): string {
 export async function write(call: TradeCall, account: Address): Promise<Hash> {
   await ensureChain();
   const { request } = await client.simulateContract({ ...call, account });
-  const hash = await walletClient().writeContract(request);
-  const rc = await client.waitForTransactionReceipt({ hash });
-  if (rc.status !== 'success') throw new Error(`Transaction ${hash} failed (status 0)`);
+  // Gas dipad 1,5× — aturan yang sama dengan tools/sepolia/lib.sh send() dan smoke test: estimasi Nitro hanya bermargin ~2–3 %, dan round Chainlink
+  // yang masuk di antara estimasi dan inklusi menambah SSTORE observe engine lewat _pokeVol. Estimasi gagal → biarkan wallet mengestimasi sendiri.
+  let gas: bigint | undefined;
+  try { gas = ((await client.estimateContractGas({ ...call, account })) * 3n) / 2n; } catch { /* biarkan wallet mengestimasi */ }
+  const hash = await walletClient().writeContract({ ...request, gas });
+  let status: 'success' | 'reverted';
+  try { status = (await client.waitForTransactionReceipt({ hash })).status; }
+  catch (e) {
+    if (e instanceof WaitForTransactionReceiptTimeoutError) throw new TxFailed('Transaction not confirmed within 3 minutes — check it on the explorer', hash);
+    throw e;
+  }
+  if (status !== 'success') throw new TxFailed('Transaction reverted on-chain (status 0)', hash);
   return hash;
 }
 /** Pendengar EIP-1193: MetaMask memancarkan `accountsChanged([])` saat disconnect dan `chainChanged(hexId)` saat jaringan berganti. */

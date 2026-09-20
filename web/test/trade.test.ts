@@ -1,6 +1,8 @@
 // test/trade.test.ts — unit tanpa jaringan: pembangun calldata, matematika slippage, label seri, tabel pesan revert.
 import { describe, expect, it } from 'vitest';
+import { toFunctionSelector } from 'viem';
 import { ALL_SERIES, POOLS, USDG } from '../src/deployment';
+import { REVERT_SELECTOR } from '../src/chain/wallet';
 import {
   ALLOWANCE_MIN, FAUCET_AMOUNT, MAX_UINT, MIN_SIZE, REVERT_TEXT, SLIPPAGE_BPS, approveCall, buyCall, claimCall, closeCall, depositCall, faucetCall, maxPremium, minProceeds,
   redeemCall, seriesLabel,
@@ -68,10 +70,15 @@ describe('seriesLabel', () => {
 });
 
 describe('REVERT_TEXT', () => {
-  it('has 12 human messages keyed by custom error name', () => {
-    expect(Object.keys(REVERT_TEXT)).toHaveLength(12);
-    for (const k of ['OracleStale', 'UtilizationExceeded', 'VegaCapExceeded', 'SlippageExceeded', 'SeriesExpired', 'SeriesSettled', 'SizeTooSmall', 'TradingIsPaused', 'MathUnavailable', 'NotSettled', 'ERC20InsufficientBalance', 'ERC20InsufficientAllowance']) {
+  it('has 16 human messages keyed by custom error name (12 pool + 3 ERC-4626 + 1 ERC-1155 token error)', () => {
+    expect(Object.keys(REVERT_TEXT)).toHaveLength(16);
+    for (const k of ['OracleStale', 'UtilizationExceeded', 'VegaCapExceeded', 'SlippageExceeded', 'SeriesExpired', 'SeriesSettled', 'SizeTooSmall', 'TradingIsPaused', 'MathUnavailable', 'NotSettled', 'ERC20InsufficientBalance', 'ERC20InsufficientAllowance',
+      'ERC4626ExceededMaxRedeem', 'ERC4626ExceededMaxWithdraw', 'ERC4626ExceededMaxDeposit', 'ERC1155InsufficientBalance']) {
       expect(REVERT_TEXT[k], k).toBeTruthy();
     }
+  });
+  it('maps the ERC-1155 selector (not in the pool ABI) to the same text', () => {
+    expect(toFunctionSelector('ERC1155InsufficientBalance(address,uint256,uint256,uint256)')).toBe('0x03dee4c5');
+    expect(REVERT_SELECTOR['0x03dee4c5']).toBe('ERC1155InsufficientBalance');
   });
 });

@@ -48,4 +48,8 @@ export const REVERT_TEXT: Record<string, string> = {
   SizeTooSmall: 'Minimum size is 0.01 units.', TradingIsPaused: 'Trading is paused by the owner (close/claim/withdraw still work).',
   MathUnavailable: 'Math program unavailable — deposits are refused until it is back (withdrawals still work).', NotSettled: 'Board not settled yet.',
   ERC20InsufficientBalance: 'Not enough USDG — use the faucet.', ERC20InsufficientAllowance: 'Approve USDG for this pool first.',
+  ERC4626ExceededMaxRedeem: 'Not enough LP shares (or the pool cannot free that much liquidity right now) — redeem fewer shares.',
+  ERC4626ExceededMaxWithdraw: 'The pool cannot free that much liquidity right now — withdraw less.',
+  ERC4626ExceededMaxDeposit: 'Deposit exceeds the pool\'s maximum right now.',
+  ERC1155InsufficientBalance: 'Not enough option units in your wallet for this series — close or claim at most your position.',
 };
