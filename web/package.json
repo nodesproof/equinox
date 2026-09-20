@@ -1,0 +1,27 @@
+{
+  "name": "equinox-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "seed": "vite-node scripts/seed-events.ts",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:network": "EQUINOX_NETWORK_TESTS=1 vitest run test/parity.network.test.ts",
+    "abi": "node scripts/gen-abi.mjs",
+    "typecheck": "tsc --noEmit",
+    "snapshot": "EQUINOX_NETWORK_TESTS=1 vitest run test/parity.network.test.ts --reporter=verbose",
+    "smoke": "EQUINOX_SMOKE=1 vitest run test/smoke.network.test.ts --reporter=verbose"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vitest": "^2.1.0"
+  }
+}
