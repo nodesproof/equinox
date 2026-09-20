@@ -1,7 +1,7 @@
-// test/events.test.ts — unit tanpa jaringan: pembagian jendela eth_getLogs, label seri dari id JSON, gabungan inkremental.
+// test/events.test.ts — unit tanpa jaringan: pembagian jendela eth_getLogs, label seri dari id JSON, gabungan inkremental, seed hasil build.
 import { describe, expect, it } from 'vitest';
-import { ALL_SERIES } from '../src/deployment';
-import { CHUNK, chunked, mergeEvents, seriesLabel, type Events, type ObservedEvent, type TradeEvent } from '../src/chain/events';
+import { ALL_SERIES, DEPLOYED_AT_BLOCK } from '../src/deployment';
+import { CHUNK, chunked, loadSeed, mergeEvents, parseSeed, seriesLabel, serializeSeed, type EventSeed, type Events, type ObservedEvent, type TradeEvent } from '../src/chain/events';
 
 describe('chunked', () => {
   it('splits a 120,001-block range into 3 inclusive windows without gaps or overlap', async () => {
@@ -52,5 +52,49 @@ describe('mergeEvents', () => {
   it('is the identity for an empty increment', () => {
     const prev: Events = { trades: [trade(1n, 0, '0x01')], observed: [obs(1n, 0)] };
     expect(mergeEvents(prev, { trades: [], observed: [] })).toEqual(prev);
+  });
+  it('prefers `next` on a key collision for trades and observed alike', () => {
+    const prev: Events = { trades: [{ ...trade(10n, 2, '0xaa'), amount: 'stale' }], observed: [{ ...obs(7n, 1), sigmaBase: 1n }] };
+    const next: Events = { trades: [{ ...trade(10n, 2, '0xaa'), amount: 'fresh' }], observed: [{ ...obs(7n, 1), sigmaBase: 2n }] };
+    const m = mergeEvents(prev, next);
+    expect(m.trades).toHaveLength(1); expect(m.trades[0]!.amount).toBe('fresh');
+    expect(m.observed).toHaveLength(1); expect(m.observed[0]!.sigmaBase).toBe(2n);
+  });
+});
+
+describe('event seed', () => {
+  const fixture: EventSeed = {
+    lastBlock: DEPLOYED_AT_BLOCK + 92_738n, generatedAt: '2026-09-20T07:30:00.000Z',
+    trades: [{ pool: 'A', kind: 'Bought', block: 310_703_386n, logIndex: 25, tx: '0x64bc18c558346d3250fd7d78ea01642cff4b5f6161d507a85906cd48f5f562b7', who: '0x90351bB1E85a17D5f70c62C0cC076D39D897076D', label: 'P 2400 #0', amount: '1.00 units · 12.73 USDG @ σ 0.67' }],
+    observed: [{ block: 310_728_592n, logIndex: 40, roundId: 18446744073710941461n, priceWad: 2613908736560000000000n, sigmaBase: 548930159383211337n }],
+  };
+  it('round-trips through serializeSeed/parseSeed with bigints restored and logIndex numeric', () => {
+    const json = serializeSeed(fixture);
+    const raw = JSON.parse(json);
+    expect(raw.lastBlock).toBe(fixture.lastBlock.toString()); expect(raw.trades[0].block).toBe('310703386'); expect(raw.observed[0].roundId).toBe('18446744073710941461');
+    expect(raw.trades[0].logIndex).toBe(25); expect(raw.observed[0].logIndex).toBe(40);
+    expect(parseSeed(json)).toEqual(fixture);
+  });
+  it('rejects a malformed document instead of yielding NaN/strings', () => {
+    expect(() => parseSeed('{"lastBlock":1}')).toThrow(/shape/);
+    expect(() => parseSeed(JSON.stringify({ lastBlock: 'abc', generatedAt: '', trades: [], observed: [] }))).toThrow(/decimal/);
+    expect(() => parseSeed(JSON.stringify({ lastBlock: '1', generatedAt: '', trades: [], observed: [{ block: '1', logIndex: '40', roundId: '1', priceWad: '1', sigmaBase: '1' }] }))).toThrow(/integer/);
+  });
+  const mockFetch = (body: string | null, status = 200): typeof fetch & { urls: string[] } => {
+    const urls: string[] = [];
+    const fn = (async (url: string | URL | Request) => { urls.push(String(url)); if (body === null) throw new Error('offline'); return new Response(body, { status }); }) as unknown as typeof fetch & { urls: string[] };
+    fn.urls = urls; return fn;
+  };
+  it('loadSeed fetches events-seed.json under the app base path and parses it', async () => {
+    const f = mockFetch(serializeSeed(fixture));
+    expect(await loadSeed(f)).toEqual(fixture);
+    expect(f.urls).toEqual([`${import.meta.env.BASE_URL}events-seed.json`]);
+    expect(f.urls[0]).toMatch(/^\/.*\/events-seed\.json$/); // dilayani di bawah base (/equinox/), bukan /events-seed.json polos
+  });
+  it('loadSeed returns null on 404, bad JSON, network error, or a seed older than the deploy block', async () => {
+    expect(await loadSeed(mockFetch('not found', 404))).toBeNull();
+    expect(await loadSeed(mockFetch('{ nope'))).toBeNull();
+    expect(await loadSeed(mockFetch(null))).toBeNull();
+    expect(await loadSeed(mockFetch(serializeSeed({ ...fixture, lastBlock: DEPLOYED_AT_BLOCK - 1n })))).toBeNull();
   });
 });

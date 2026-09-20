@@ -4,7 +4,7 @@ import { DEPLOYED_AT_BLOCK } from './deployment';
 import { readSnapshot, type Snapshot } from './chain/snapshot';
 import { readParity } from './chain/parity';
 import { readGas } from './chain/gas';
-import { mergeEvents, readEvents, type Events } from './chain/events';
+import { loadSeed, mergeEvents, readEvents, type Events } from './chain/events';
 import { el, mount } from './ui/dom';
 import { startPolling } from './ui/poll';
 import { createHeader } from './panels/header';
@@ -37,6 +37,13 @@ const EVENTS_EVERY = 4;
 let events: Events = { trades: [], observed: [] };
 let lastEventsBlock: bigint | null = null;
 let refreshes = 0;
+setInterval(paint, 1000);
+// Seed hasil build (public/events-seed.json, `npm run seed`): umpan tampil seketika dan pemindaian pertama hanya dari lastBlock + 1,
+// bukan dari blok deploy. Tanpa seed (404/rusak) perilaku persis pemindaian penuh; placeholder "loading events…" panel menutup jendela fetch ini.
+try {
+  const seed = await loadSeed();
+  if (seed) { events = { trades: seed.trades, observed: seed.observed }; lastEventsBlock = seed.lastBlock; activity.setEvents(events); }
+} catch (e) { console.warn('seed:', e); }
 startPolling(async () => {
   const s = await readSnapshot(client);
   snapshot = s; meta.lastOkMs = Date.now(); meta.error = null; paint();
@@ -53,4 +60,3 @@ startPolling(async () => {
     } catch (e) { console.warn('events:', e); }
   }
 }, (e) => { meta.error = e instanceof Error ? e.message : String(e); paint(); });
-setInterval(paint, 1000);

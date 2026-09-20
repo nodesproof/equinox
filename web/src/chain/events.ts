@@ -70,7 +70,11 @@ export async function readEvents(client: Client, toBlock: bigint, fromBlock: big
   return { trades, observed };
 }
 
-/** Gabungan hasil inkremental: dedupe per (tx, logIndex), trades terbaru dulu, observed urut rantai. */
+/**
+ * Gabungan hasil inkremental: dedupe per (tx, logIndex) — observed tanpa tx memakai (blok, logIndex), unik di satu blok.
+ * Pada tabrakan kunci `next` (pembacaan terbaru) menang untuk trades DAN observed: pembacaan terbaru mencerminkan rantai kanonis saat ini,
+ * sedangkan `prev` bisa berasal dari seed hasil build yang lebih tua. Trades terbaru dulu, observed urut rantai.
+ */
 export function mergeEvents(prev: Events, next: Events): Events {
   const key = (e: { tx?: string; block: bigint; logIndex: number }) => `${e.tx ?? e.block}:${e.logIndex}`;
   const dedupe = <T extends { block: bigint; logIndex: number; tx?: string }>(xs: T[]) => {
@@ -79,6 +83,47 @@ export function mergeEvents(prev: Events, next: Events): Events {
   };
   return {
     trades: dedupe([...next.trades, ...prev.trades]).sort(newestFirst),
-    observed: dedupe([...prev.observed, ...next.observed]).sort(oldestFirst),
+    observed: dedupe([...next.observed, ...prev.observed]).sort(oldestFirst),
   };
+}
+
+// --- Seed hasil build: public/events-seed.json, ditulis scripts/seed-events.ts saat build dan dibaca main.ts sebelum poll dimulai. ---
+export interface EventSeed { lastBlock: bigint; generatedAt: string; trades: TradeEvent[]; observed: ObservedEvent[] }
+
+/** JSON tidak punya bigint: bigint → string desimal; `logIndex` tetap number. Pasangan serialize/parse ini dipakai penulis DAN pembaca agar tidak drift. */
+export function serializeSeed(seed: EventSeed): string {
+  return JSON.stringify(seed, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+}
+type Raw = Record<string, unknown>;
+export function parseSeed(json: string): EventSeed {
+  const o = JSON.parse(json) as Raw;
+  if (typeof o.lastBlock !== 'string' || typeof o.generatedAt !== 'string' || !Array.isArray(o.trades) || !Array.isArray(o.observed)) throw new Error('seed: unexpected shape');
+  const big = (v: unknown, what: string) => { if (typeof v !== 'string' || !/^\d+$/.test(v)) throw new Error(`seed: ${what} is not a decimal string`); return BigInt(v); };
+  const num = (v: unknown, what: string) => { if (typeof v !== 'number' || !Number.isInteger(v)) throw new Error(`seed: ${what} is not an integer`); return v; };
+  return {
+    lastBlock: big(o.lastBlock, 'lastBlock'), generatedAt: o.generatedAt,
+    trades: (o.trades as Raw[]).map((t): TradeEvent => ({
+      pool: t.pool as PoolKey, kind: t.kind as TradeEvent['kind'], block: big(t.block, 'trades[].block'), logIndex: num(t.logIndex, 'trades[].logIndex'),
+      tx: t.tx as `0x${string}`, who: (t.who ?? null) as Address | null, label: String(t.label), amount: String(t.amount),
+    })),
+    observed: (o.observed as Raw[]).map((x): ObservedEvent => ({
+      block: big(x.block, 'observed[].block'), logIndex: num(x.logIndex, 'observed[].logIndex'),
+      roundId: big(x.roundId, 'observed[].roundId'), priceWad: big(x.priceWad, 'observed[].priceWad'), sigmaBase: big(x.sigmaBase, 'observed[].sigmaBase'),
+    })),
+  };
+}
+
+/**
+ * Seed dari `${BASE_URL}events-seed.json` — halaman dilayani di /equinox/ (dev maupun Pages), jadi `/events-seed.json` polos akan 404.
+ * Kegagalan apa pun (404, JSON rusak, jaringan) → null = pemindaian penuh. Seed dari deployment lain (lastBlock sebelum blok deploy) juga ditolak.
+ */
+export async function loadSeed(fetchFn: typeof fetch = fetch): Promise<EventSeed | null> {
+  try {
+    const res = await fetchFn(`${import.meta.env.BASE_URL}events-seed.json`);
+    if (!res.ok) return null;
+    const seed = parseSeed(await res.text());
+    return seed.lastBlock < DEPLOYED_AT_BLOCK ? null : seed;
+  } catch {
+    return null;
+  }
 }

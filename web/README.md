@@ -9,6 +9,7 @@ Published at <https://nodesproof.github.io/equinox/> (GitHub Pages, `base: /equi
 ```sh
 cd web
 npm ci
+npm run seed       # optional: public/events-seed.json (event scan since deploy) so the page skips the cold scan
 npm run dev        # http://localhost:5173/equinox/
 ```
 
@@ -17,7 +18,7 @@ Query parameters:
 - `?rpc=http://127.0.0.1:8545` — point the page at a local node (nitro devnode / anvil fork). Only loopback hosts (`127.0.0.1`, `localhost`) are honoured; anything else falls back to the manifest RPC.
 - `?poll=4000` — shorten the poll interval in ms (floor 2000, default 15000). Handy while filming a script that changes state.
 
-Events are read with `eth_getLogs` in 50,000-block windows from the pools' deploy block on the first successful snapshot, then incrementally (from the last block read) every 4th refresh; the public RPC answers a 50k window in well under a second but rate-limits (HTTP 429) much wider ranges.
+Events are read with `eth_getLogs` in 50,000-block windows. `npm run seed` scans everything since the pools' deploy block once and writes `public/events-seed.json` (served at `/equinox/events-seed.json`; git-ignored, regenerated at every build); the page loads that seed first and then only reads the delta from the seed's `lastBlock + 1` — on the first successful snapshot and every 4th refresh. Without a seed (404, or the seed step failed) the page falls back to the full scan from the deploy block. The public RPC answers a 50k window in well under a second but rate-limits (HTTP 429) much wider ranges, which is why the cold scan is done at build time.
 
 ## Checks
 
@@ -33,7 +34,8 @@ CI regenerates the ABIs from the Foundry artifacts and fails on drift, so commit
 ## Build
 
 ```sh
-npm run build              # → dist/ (index.html + assets/), served under /equinox/
+npm run seed               # scan events since deploy → public/events-seed.json (exits non-zero and writes nothing on error)
+npm run build              # → dist/ (index.html + assets/ + events-seed.json if seeded), served under /equinox/
 npm run preview            # serve dist/ at http://localhost:4173/equinox/
 ```
 
