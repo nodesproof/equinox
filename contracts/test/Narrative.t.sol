@@ -17,6 +17,16 @@ contract NarrativeTest is PoolFixture {
         return string(abi.encodePacked(vm.toString(w), ".", out));
     }
 
+    /// @dev nilai 18 dp (WAD) dicetak dengan 4 desimal, dibulatkan ke terdekat — mis. sigma 0.6325
+    function _wad(uint256 wad) internal pure returns (string memory) {
+        uint256 r = (wad + 5e13) / 1e14;
+        uint256 w = r / 1e4; uint256 f = r % 1e4;
+        bytes memory fs = bytes(vm.toString(f + 1e4)); // padding 4 digit
+        bytes memory out = new bytes(4);
+        for (uint256 i = 0; i < 4; i++) out[i] = fs[i + 1];
+        return string(abi.encodePacked(vm.toString(w), ".", out));
+    }
+
     function test_narrative_scenario1_prints_table() public {
         console2.log("| Langkah | Nilai |");
         console2.log("|---|---|");
@@ -34,9 +44,9 @@ contract NarrativeTest is PoolFixture {
         uint256 mid6 = (midWad + 1e12 - 1) / 1e12;
         assertApproxEqAbs(mid6, 64_870_000, 20_000, "mid C4200 7d @ 63.25% = 64.87");
         EquinoxPool.QuoteOut memory q = pool.quoteBuy(idC, 10e18);
-        console2.log("| sigma_mark(0) | %s (0.55 x VRP 1.15) |", vm.toString(vol.sigmaMark(0)));
+        console2.log("| sigma_mark(0) | %s (0.55 x VRP 1.15) |", _wad(vol.sigmaMark(0)));
         console2.log("| mid C4200 7d per unit | %s USDG |", _usd(mid6));
-        console2.log("| quoteBuy 10 C4200 | premi %s USDG @ sigma_buy %s, fee %s |", _usd(q.premiumAssets), vm.toString(q.sigma), _usd(q.feeAssets));
+        console2.log("| quoteBuy 10 C4200 | premi %s USDG @ sigma_buy %s, fee %s |", _usd(q.premiumAssets), _wad(q.sigma), _usd(q.feeAssets));
         assertGt(q.premiumAssets, mid6 * 10, "harga beli > mid (spread + dampak inventaris)");
         uint256 premC = traderBuy(idC, 10e18);
         EquinoxPool.QuoteOut memory qp = pool.quoteBuy(idP, 1e18);
