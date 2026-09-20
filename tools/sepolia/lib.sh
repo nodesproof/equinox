@@ -18,8 +18,15 @@ addr() { cast call --rpc-url "$RPC" "$1" "$2" "${@:3}" | awk '{print tolower($1)
 num() { cast call --rpc-url "$RPC" "$1" "$2" "${@:3}" | awk '{print $1}'; }
 # kirim tx; cetak "txhash gasUsed"; gagal keras bila revert. Pakai lewat command substitution — res=$(send …) —
 # supaya kegagalan menghentikan skrip (errexit); JANGAN lewat process substitution (< <(send …)), yang menelan exit code.
+# Gas limit = 1,5 × eth_estimateGas: estimasi Nitro hanya menyisakan ≈ 5–7k gas, dan biaya `buy`/`close`/`settle` berubah
+# bila round Chainlink baru mendarat di antara estimasi dan eksekusi (`vol.poke()` jalur penuh ≈ +25k gas) — tanpa
+# bantalan, tx bisa out-of-gas (kejadian di demo 20 Sep: 0x1262c6cb…, gasUsed == gasLimit). Gas sisa dikembalikan.
+# `cast send` keluar 0 walau receipt status 0, maka status dicek eksplisit.
 send() {
-  local out; out=$(cast send --rpc-url "$RPC" --private-key "$PK" "$@" 2>&1) || { echo "$out" | tail -3 >&2; die "cast send $1 $2"; }
+  local est out
+  est=$(cast estimate --rpc-url "$RPC" --from "$ME" "$@" 2>&1) || { echo "$est" | tail -3 >&2; die "estimate $1 $2 (revert?)"; }
+  out=$(cast send --rpc-url "$RPC" --private-key "$PK" --gas-limit $(( est * 3 / 2 )) "$@" 2>&1) || { echo "$out" | tail -3 >&2; die "cast send $1 $2"; }
+  echo "$out" | grep -Eq '^status[[:space:]]+1' || { echo "$out" | grep -E '^(transactionHash|status|gasUsed)[[:space:]]' >&2; die "tx gagal (revert/out-of-gas) $1 $2"; }
   echo "$out" | awk '/^transactionHash[[:space:]]/ {h=$2} /^gasUsed[[:space:]]/ {g=$2} END {print h, g}'
 }
 # tulis JSON in-place: jq_set '<filter>' [--arg k v …]
