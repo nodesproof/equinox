@@ -47,3 +47,7 @@ npm run preview            # serve dist/ at http://localhost:4173/equinox/
 ```
 
 The footer shows the commit (`GITHUB_SHA` in CI, `git rev-parse` locally) and build time baked in at build.
+
+## Pages
+
+`.github/workflows/pages.yml` builds and deploys this site on every push to `main` that touches `web/**`, `deployments/**` or the workflow file itself (also `workflow_dispatch`): `npm ci` → `npm run seed` (failure tolerated — a failed or skipped seed just falls back to the live full scan described above) → `npm run typecheck && npm test && npm run build` → `actions/upload-pages-artifact@v3` on `web/dist` → `actions/deploy-pages@v4`. The repo's Pages source is set to `workflow` (`gh api repos/nodesproof/equinox/pages`, build type `workflow`), so the deploy only runs from this Actions workflow, never from a branch push directly. Both this workflow and `keeper.yml` are branch-gated by GitHub Actions itself and only run once they are on `main` — the dashboard goes live at <https://nodesproof.github.io/equinox/> after the Plan 3b PRs merge.

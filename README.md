@@ -15,9 +15,10 @@ Built for the Arbitrum Open House Singapore Online Buildathon (2026).
 | Pool contracts: LP vault (ERC-4626), option series (ERC-1155), buy/close, settlement, claims, volatility engine, two-level factory | ✅ done — 87 Foundry tests in 9 suites (68 on the pool, vol engine, option token and oracle, incl. 7 invariants: 32 runs × depth 128 in CI, 256 × 200 = 51,200 calls each in the long run; 12 on the math control; 3 on the factory's shared-engine path, 3 on the E2E deployer, 1 deterministic §13 narrative), 93.4 % line coverage on `src/pool` + `src/oracle` (428/458 lines), three audit rounds plus a final fix wave; two identical pools (control vs Stylus) verified byte-identical on a devnode |
 | Math on Arbitrum Sepolia: Stylus program (cached), Solidity control and `Bench` | ✅ deployed 20 Sep 2026 — 20/20 on-chain exactness checks; cached-program gas measured directly and equal to the devnode-derived column; addresses in `deployments/arbitrum-sepolia.json` |
 | Pools live on Sepolia (real Chainlink feed, shared vol engine, keeper, demo log) | ✅ 20 Sep 2026 — two pools, two boards, 12 series each; math parity verified on-chain (20/20 exactness checks on both `math` addresses); the demo's opening quote was byte-identical on both pools at block 310700824; pool quotes may since differ through the inventory term of σ_mark once trade histories diverge; every demo tx (incl. one out-of-gas, post-mortem included) in `docs/DEMO_LOG.md` |
-| Dashboard + wallet trading, submission package | ⏳ Plan 3b |
+| Dashboard + wallet trading | ✅ <https://nodesproof.github.io/equinox/> (live after the PRs merge; read-only without a wallet; trade with MetaMask on Arbitrum Sepolia) |
+| Submission package | ⏳ Plan 3b |
 
-The pricing engine and the pool are implemented, verified and live on Arbitrum Sepolia (next section); the dashboard, wallet trading and the submission package are next (Plan 3b). The full product specification lives in [`prd-arsitektur.md`](prd-arsitektur.md) (Indonesian).
+The pricing engine and the pool are implemented, verified and live on Arbitrum Sepolia (next section); the dashboard and wallet trading are built (below) and go live at the URL above once this branch merges to `main`; the submission package is next (Plan 3b). The full product specification lives in [`prd-arsitektur.md`](prd-arsitektur.md) (Indonesian).
 
 ## Live on Arbitrum Sepolia
 
@@ -56,7 +57,9 @@ cast call 0x7f79616217cc49edea777108b60981d7bf807cc9 \
 #   41551611760187069091162684964077452440970677971418960621668611916735289915441
 ```
 
-To trade from a shell, put a funded key in a git-ignored `.env` (`SEPOLIA_PRIVATE_KEY`, optional `SEPOLIA_RPC_URL`) and run `tools/demo/sepolia-demo.sh --trade [board index]` — it compares pool quotes only while both pools carry identical inventory (`netVega` and the util/cap capital reference equal at that block); otherwise it checks math parity directly on both `math` contracts and prints the pool-quote Δ (K5); `--check` runs the same quote block without trading. Dashboard and wallet trading from the browser: Plan 3b.
+To trade from a shell, put a funded key in a git-ignored `.env` (`SEPOLIA_PRIVATE_KEY`, optional `SEPOLIA_RPC_URL`) and run `tools/demo/sepolia-demo.sh --trade [board index]` — it compares pool quotes only while both pools carry identical inventory (`netVega` and the util/cap capital reference equal at that block); otherwise it checks math parity directly on both `math` contracts and prints the pool-quote Δ (K5); `--check` runs the same quote block without trading.
+
+**Dashboard.** The page at <https://nodesproof.github.io/equinox/> (`web/`, Vite + TypeScript + viem, no backend — reads every address from `deployments/arbitrum-sepolia.json` and polls the public RPC directly) shows the series board for both pools with K5 math parity checked live, each pool's quote side by side with the inventory Δ that separates them once trade histories diverge, NAV, gas A vs B per action, and an activity feed with a σ_base chart built from pool and vol-engine events. Connect MetaMask on Arbitrum Sepolia to drive the same faucet → approve → buy/close/claim flow as `sepolia-demo.sh`, with every write simulated — and its revert decoded — before the wallet opens; without a wallet the page is read-only. `?rpc=http://127.0.0.1:8545` overrides the RPC with a loopback node (anything non-loopback is ignored) and `?poll=4000` shortens the refresh interval (floor 2000 ms, default 15000). Source and details: [`web/README.md`](web/README.md).
 
 ## Why
 
