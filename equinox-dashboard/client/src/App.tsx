@@ -1,5 +1,4 @@
 import { Router, Route, Switch } from 'wouter';
-import { useHashLocation } from 'wouter/use-hash-location';
 import type { Client } from '@chain/chain/client';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -8,12 +7,15 @@ import { ThemeProvider } from '@/contexts/ThemeContext';
 import { ChainProvider } from '@/chain/provider';
 import { ClockProvider } from '@/chain/clock';
 import { Layout } from '@/components/Layout';
+import { useHashRoute } from '@/lib/route';
 import Overview from '@/pages/Overview';
+import Boards from '@/pages/Boards';
 import ComingSoon from '@/pages/ComingSoon';
 
 // Komposisi: ChainProvider (satu snapshot per poll, brief §5) → ClockProvider (detak 1 s terpisah) → router hash → Layout → halaman.
+// Router memakai `useHashRoute` (lokasi hash tanpa `?…`) agar tautan prefill `#/trade?pool=B&series=3` / `#/boards?board=1` cocok dengan rutenya.
 // `client` hanya di-inject oleh test (stub tanpa jaringan); produksi memakai client publik default provider.
-// Halaman lain ditambahkan Task 4–6; sampai itu ada, rute menampilkan placeholder "coming next" TANPA angka.
+// Halaman lain ditambahkan Task 5–6; sampai itu ada, rute menampilkan placeholder "coming next" TANPA angka.
 export default function App({ client }: { client?: Client } = {}) {
   return (
     <ErrorBoundary>
@@ -22,11 +24,11 @@ export default function App({ client }: { client?: Client } = {}) {
           <Toaster theme="dark" position="bottom-right" />
           <ChainProvider client={client}>
             <ClockProvider>
-              <Router hook={useHashLocation}>
+              <Router hook={useHashRoute}>
                 <Layout>
                   <Switch>
                     <Route path="/" component={Overview} />
-                    <Route path="/boards"><ComingSoon title="Boards & series" detail="One table per expiry board: buy and close quotes per pool, inventory delta, K5 parity, open interest and σ_buy — all read from the chain at one block." /></Route>
+                    <Route path="/boards" component={Boards} />
                     <Route path="/trade"><ComingSoon title="Trade" detail="Pool switch, faucet or Paxos link per asset, approve, deposit and redeem, buy and close with indicative and executed previews, and a transaction log with decoded reverts." /></Route>
                     <Route path="/portfolio"><ComingSoon title="Portfolio" detail="Asset balance per pool, LP shares valued at NAV per share, option positions with their current close value and claimable payout, and your own history." /></Route>
                     <Route path="/activity"><ComingSoon title="Activity" detail="Event feed across pools with filters, the σ_base chart on a time axis from Observed events, and settlement markers." /></Route>

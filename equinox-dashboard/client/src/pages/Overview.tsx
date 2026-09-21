@@ -129,7 +129,7 @@ export default function Overview() {
       <section>
         <SectionHeading eyebrow="Boards" title="Series around the money"
           detail={`ATM ± 2 rows per board (${BOARDS.length} boards in the manifest); buy quotes are per 1.0 unit at each pool's inventory — the full table with close, Δ, OI and Greeks lives on Boards.`}
-          action={<Link href="/boards" className="button-ghost button-small">All series <ArrowUpRight size={14} /></Link>} />
+          action={<Link href="/boards" className="button-ghost button-small">View all boards <ArrowUpRight size={14} /></Link>} />
         <BoardSummary boards={boards} spotWad={snapshot?.feed.spotWad ?? null} emptyLabel={emptyLabel} />
       </section>
 

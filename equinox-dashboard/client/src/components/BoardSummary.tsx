@@ -1,13 +1,13 @@
 // BoardSummary.tsx — papan ringkas Overview dari selector `useBoards()`: per board (manifest) baris ATM ± 2, kuotasi buy 1 unit per pool
 // (6 dp, atau ALASAN kuotasi kosong: nama revert / blackout / expired / settled @ payout), paritas K5 dan σ_buy per pool. Tabel penuh = Boards (Task 4).
 import { memo } from 'react';
-import { Link } from 'wouter';
 import { ArrowUpRight } from 'lucide-react';
 import { POOL_KEYS, type PoolKey } from '@chain/deployment';
 import { fmtCountdown, usdg6, utc, wad } from '@chain/ui/format';
 import { seriesLabel } from '@chain/chain/trade';
 import { ASSET_SCALE, T_MIN, type BoardView, type SeriesView } from '@/chain/selectors';
 import { EmptyValue, SkeletonLine, StatusPill, type PillTone } from '@/components/primitives';
+import { boardsHref } from '@/lib/route';
 
 /** Jendela ATM ± span baris: berpusat pada baris ATM board itu, atau pada call dengan strike terdekat spot bila board tidak memuat seri ATM. */
 export function atmWindow(series: SeriesView[], spotWad: bigint, span = 2): SeriesView[] {
@@ -101,7 +101,7 @@ function BoardSummaryView({ boards, spotWad, emptyLabel = 'Awaiting snapshot' }:
                         </div>
                       </td>
                       {POOL_KEYS.map((k) => <td key={k} className={r.state[k].buy ? 'mono' : 'muted-text'}>{quoteCell(r, k)}</td>)}
-                      <td className={`parity ${r.parity === null ? 'pending' : ''}`} data-parity={r.parity?.ok === false ? 'bad' : r.parity?.ok ? 'ok' : 'none'}>{parityMark(r)}</td>
+                      <td><span className={`parity ${r.parity === null ? 'pending' : ''}`} data-parity={r.parity?.ok === false ? 'bad' : r.parity?.ok ? 'ok' : 'none'}>{parityMark(r)}</span></td>
                       <td className="mono">{POOL_KEYS.some((k) => r.state[k].buy) ? POOL_KEYS.map((k) => (r.state[k].buy ? wad(r.state[k].buy!.sigma) : '—')).join(' | ') : '—'}</td>
                     </tr>
                   ))}
@@ -110,7 +110,7 @@ function BoardSummaryView({ boards, spotWad, emptyLabel = 'Awaiting snapshot' }:
             </div>
             <div className="board-panel__foot">
               <span>Quotes are per <strong>1.0 unit</strong> at each pool's own inventory (σ_mark(util)) — indicative view quotes; Δ is inventory, not math.</span>
-              <Link href="/boards" className="soft-button">Full board <ArrowUpRight size={14} /></Link>
+              <a href={boardsHref(b.board.id)} className="soft-button">Full board <ArrowUpRight size={14} /></a>
             </div>
           </article>
         );

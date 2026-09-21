@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Client } from '@chain/chain/client';
+import { BOARDS } from '@chain/deployment';
 import App from '@/App';
 
 // Uji asap: cangkang merender chrome testnet (brief §7.1), router hash memetakan rute, dan ChainProvider yang di-mount memakai client stub
@@ -29,11 +30,15 @@ describe('App shell', () => {
     for (const el of Array.from(document.querySelectorAll('.metric-card__value'))) expect(el.textContent).not.toMatch(/\d/);
   });
 
-  it('routes by hash: #/boards shows the Boards placeholder without data', () => {
+  it('routes by hash: #/boards shows the Boards page as a skeleton without data', () => {
     window.location.hash = '#/boards';
     render(<App client={offline} />);
     expect(screen.getByRole('heading', { level: 2, name: /Boards & series/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Boards/, current: 'page' })).toHaveAttribute('href', '#/boards');
+    // Satu panel kerangka per board manifest, tanpa baris seri dan tanpa kuotasi (tidak ada angka palsu).
+    expect(document.querySelectorAll('article.board-panel')).toHaveLength(BOARDS.length);
+    expect(document.querySelectorAll('tr.series-row')).toHaveLength(0);
+    expect(screen.getAllByText('Awaiting snapshot').length).toBeGreaterThanOrEqual(BOARDS.length);
   });
 
   it('falls back to "Not found" for unknown hashes', () => {
