@@ -1,6 +1,6 @@
 // test/deployment.test.ts — bentuk manifest; bebas dari jumlah board (board 9/16 Okt ditambahkan setelah settlement pertama) dan jumlah pool (C opsional), spot check tetap pada board 0.
 import { describe, expect, it } from 'vitest';
-import { ALL_SERIES, BOARDS, CHAIN_ID, GAS_KEYS, MATH_SOL, MATH_STYLUS, PAXOS_FAUCET, POOLS, POOL_KEYS, USDG, VOL } from '../src/deployment';
+import { ALL_SERIES, BOARDS, CHAIN_ID, DEPLOYED_AT, DEPLOYED_AT_BLOCK, GAS_KEYS, MATH_SOL, MATH_STYLUS, PAXOS_FAUCET, POOLS, POOL_KEYS, USDG, VOL } from '../src/deployment';
 describe('deployment manifest', () => {
   it('is Arbitrum Sepolia with at least two boards of six series each on the Friday 08:00 UTC grid', () => {
     expect(CHAIN_ID).toBe(421614);
@@ -33,5 +33,9 @@ describe('deployment manifest', () => {
     expect(POOLS.A.math).toBe(MATH_SOL); expect(POOLS.B.math).toBe(MATH_STYLUS);
     if (POOL_KEYS.includes('C')) { expect(POOLS.C.faucet).toBe('paxos'); expect(POOLS.C.asset).not.toBe(USDG); expect(POOLS.C.math).toBe(POOLS.B.math); expect(POOLS.C.pool).not.toBe(POOLS.B.pool); }
     expect(PAXOS_FAUCET).toBe('https://faucet.paxos.com/');
+    // Anchor deploy (blok + waktu unix dari `pools.deployedAt` ISO) untuk interpolasi "≈ waktu blok" di dashboard: keduanya positif dan sebelum board pertama.
+    expect(DEPLOYED_AT_BLOCK).toBeGreaterThan(0n);
+    expect(Number.isInteger(DEPLOYED_AT) && DEPLOYED_AT > 0).toBe(true);
+    expect(DEPLOYED_AT).toBeLessThan(BOARDS[0]!.expiry);
   });
 });

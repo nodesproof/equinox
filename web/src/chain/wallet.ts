@@ -93,10 +93,15 @@ export async function write(call: TradeCall, account: Address): Promise<Hash> {
   if (status !== 'success') throw new TxFailed('Transaction reverted on-chain (status 0)', hash);
   return hash;
 }
-/** Pendengar EIP-1193: MetaMask memancarkan `accountsChanged([])` saat disconnect dan `chainChanged(hexId)` saat jaringan berganti. */
-export function onWalletEvents(h: { accounts(a: Address[]): void; chain(id: number): void }): void {
+/** Pendengar EIP-1193: MetaMask memancarkan `accountsChanged([])` saat disconnect dan `chainChanged(hexId)` saat jaringan berganti.
+ *  Mengembalikan fungsi pelepas (`removeListener` bila provider menyediakannya; no-op selain itu) — dipakai cleanup efek React agar
+ *  StrictMode dev / remount tidak menumpuk pendengar; panel klasik (`panels/trade.ts`) mengabaikan nilai kembaliannya. */
+export function onWalletEvents(h: { accounts(a: Address[]): void; chain(id: number): void }): () => void {
   const eth = typeof window !== 'undefined' ? window.ethereum : undefined;
-  if (!eth?.on) return;
-  eth.on('accountsChanged', (a) => h.accounts(((a as string[]) ?? []).map((x) => getAddress(x))));
-  eth.on('chainChanged', (id) => h.chain(Number(id)));
+  if (!eth?.on) return () => {};
+  const onAccounts = (a: unknown) => h.accounts(((a as string[]) ?? []).map((x) => getAddress(x)));
+  const onChain = (id: unknown) => h.chain(Number(id));
+  eth.on('accountsChanged', onAccounts);
+  eth.on('chainChanged', onChain);
+  return () => { eth.removeListener?.('accountsChanged', onAccounts); eth.removeListener?.('chainChanged', onChain); };
 }
