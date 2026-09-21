@@ -49,3 +49,18 @@ export function liveSeed(): EventSeed {
   const last = [...e.trades, ...e.observed].reduce((m, x) => (x.block > m ? x.block : m), DEPLOYED_AT_BLOCK);
   return { lastBlock: last, generatedAt: '2026-09-20T13:03:00.000Z', trades: e.trades, observed: e.observed };
 }
+
+/** Event Settled sintetis (tanpa pelaku) untuk board `boardId` di pool `k` — label & amount = format events.ts; blok setelah semua trade fixture. */
+export function settledEvent(k: PoolKey, boardId: number, price: number, blockOffset = 0n): TradeEvent {
+  const last = liveTrades()[0]!.block;
+  return {
+    pool: k, kind: 'Settled', block: last + 500n + blockOffset, logIndex: 7, tx: hash(90 + Number(blockOffset)), who: null,
+    label: `board #${boardId}`, amount: `S_T ${price.toFixed(2)} · escrow +${(500).toFixed(2)} · reserved −${(16_400).toFixed(2)}`,
+  };
+}
+/** Event Claimed sintetis oleh `who` di pool `k` untuk seri `series` (indeks ALL_SERIES). */
+export function claimedEvent(k: PoolKey, series: number, who: `0x${string}`, blockOffset = 0n): TradeEvent {
+  const last = liveTrades()[0]!.block;
+  const ref = ALL_SERIES[series]!;
+  return { pool: k, kind: 'Claimed', block: last + 800n + blockOffset, logIndex: 2, tx: hash(120 + Number(blockOffset)), who, label: seriesLabel(k, ref.id[k]), amount: `${w(5n * WAD)} units · payout ${u6(500_000_000n)} USDG` };
+}

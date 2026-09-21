@@ -1,6 +1,8 @@
-// SigmaChart.tsx — grafik σ_base dari event `Observed` engine bersama (sumbu x = urutan observasi), port JSX dari `web/src/ui/svg.ts`
-// (skala linier, rentang datar → garis tengah, label min/max) tanpa recharts (putusan pengendali). Tooltip = blok, σ_base, harga, round.
-// Kosong → empty-state jujur menurut `eventsState` (seed / scanning / live / error); tidak pernah kurva contoh.
+// SigmaChart.tsx — grafik σ_base dari event `Observed` engine bersama, port JSX dari `web/src/ui/svg.ts` (skala linier, rentang datar → garis
+// tengah, label min/max) tanpa recharts (putusan pengendali). Tooltip = blok, σ_base, harga, round. Kosong → empty-state jujur menurut
+// `eventsState` (seed / scanning / live / error); tidak pernah kurva contoh.
+// Sumbu x: urutan observasi (Overview, default) atau nomor blok (Activity: garis waktu) — pada mode blok grafik menerima penanda vertikal
+// (Settled) dan fungsi perkiraan waktu blok untuk label sumbu x & tooltip (selalu ditandai "≈").
 import { memo, useMemo, useState, type MouseEvent } from 'react';
 import { Radio } from 'lucide-react';
 import type { EventsState } from '@/chain/types';
@@ -14,11 +16,24 @@ export const MAX_POINTS = 400;
 const W = 720, H = 220, PAD = 18;
 const fmt4 = (v: number) => v.toFixed(4);
 
+/** Penanda vertikal pada satu blok (mis. Settled): `label` singkat di grafik, `title` lengkap (tooltip native). */
+export interface ChartMarker { block: bigint; label: string; title: string }
+export type XAxis = 'order' | 'block';
+
 export interface SigmaChartProps {
   observed: ObservedEvent[];
   eventsState: EventsState;
   /** `snapshot.vol` untuk baris kaki (lastRoundId / lastTs); null sebelum snapshot pertama. */
   vol: VolState | null;
+  /** 'order' (default) = x berjarak sama per observasi; 'block' = x sebanding nomor blok (garis waktu). */
+  xAxis?: XAxis;
+  /** Penanda pada blok tertentu — digambar hanya pada mode 'block' dan hanya bila ada observasi. */
+  markers?: ChartMarker[];
+  /** Perkiraan unix time (s) sebuah blok untuk label sumbu x & tooltip; null/undefined = tidak ada snapshot → hanya nomor blok. */
+  timeOf?: ((block: bigint) => number) | null;
+  /** Catatan legenda untuk perkiraan waktu (ditampilkan bila `timeOf` ada). */
+  timeNote?: string;
+  heading?: { eyebrow: string; title: string };
 }
 
 /** Teks empty-state per status umpan: seed kosong, pindaian berjalan, pindaian gagal, atau memang belum ada observasi sejak deploy. */
@@ -31,18 +46,22 @@ export function emptyText(state: EventsState): { title: string; detail: string }
   }
 }
 
-interface Geometry { xs: number[]; ys: number[]; yMin: number; yMax: number; line: string; area: string }
-function geometry(points: ObservedEvent[]): Geometry | null {
+interface Geometry { xs: number[]; ys: number[]; yMin: number; yMax: number; line: string; area: string; /** x untuk blok mana pun (mode blok; di-clamp ke tepi plot). */ xOf: (block: bigint) => number }
+function geometry(points: ObservedEvent[], xAxis: XAxis): Geometry | null {
   const n = points.length;
   if (n === 0) return null;
   const values = points.map((o) => Number(o.sigmaBase) / 1e18);
   const yMin = Math.min(...values), yMax = Math.max(...values);
-  const sx = (i: number) => (n === 1 ? W / 2 : PAD + (i / (n - 1)) * (W - 2 * PAD));
+  const b0 = points[0]!.block, b1 = points[n - 1]!.block;
+  const span = Number(b1 - b0);
+  const clamp = (x: number) => Math.min(W - PAD, Math.max(PAD, x));
+  const xOf = (block: bigint) => (span <= 0 ? W / 2 : clamp(PAD + (Number(block - b0) / span) * (W - 2 * PAD)));
+  const sx = (i: number) => (xAxis === 'block' ? xOf(points[i]!.block) : n === 1 ? W / 2 : PAD + (i / (n - 1)) * (W - 2 * PAD));
   const sy = (y: number) => (yMax === yMin ? H / 2 : H - PAD - ((y - yMin) / (yMax - yMin)) * (H - 2 * PAD));
   const xs = values.map((_, i) => sx(i)), ys = values.map(sy);
   const line = xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${ys[i]!.toFixed(1)}`).join('');
   const area = n > 1 ? `${line}L${xs[n - 1]!.toFixed(1)} ${H - PAD}L${xs[0]!.toFixed(1)} ${H - PAD}Z` : '';
-  return { xs, ys, yMin, yMax, line, area };
+  return { xs, ys, yMin, yMax, line, area, xOf };
 }
 
 function LastObservation({ vol }: { vol: VolState }) {
@@ -50,11 +69,14 @@ function LastObservation({ vol }: { vol: VolState }) {
   return <span title={`lastRoundId ${vol.lastRoundId} · lastTs ${vol.lastTs}`}>engine lastRoundId …{vol.lastRoundId.toString().slice(-5)} · {utc(vol.lastTs)} ({fmtAge(now / 1000 - vol.lastTs)})</span>;
 }
 
-function SigmaChartView({ observed, eventsState, vol }: SigmaChartProps) {
+const NO_MARKERS: ChartMarker[] = [];
+const DEFAULT_HEADING = { eyebrow: 'Volatility engine · shared', title: 'Observed σ_base' };
+
+function SigmaChartView({ observed, eventsState, vol, xAxis = 'order', markers = NO_MARKERS, timeOf = null, timeNote, heading = DEFAULT_HEADING }: SigmaChartProps) {
   const points = useMemo(() => observed.slice(-MAX_POINTS), [observed]);
-  const geo = useMemo(() => geometry(points), [points]);
+  const geo = useMemo(() => geometry(points, xAxis), [points, xAxis]);
   const [hover, setHover] = useState<number | null>(null);
-  const last = points[points.length - 1] ?? null;
+  const first = points[0] ?? null, last = points[points.length - 1] ?? null;
   const empty = emptyText(eventsState);
   const onMove = (e: MouseEvent<SVGSVGElement>) => {
     if (!geo) return;
@@ -66,18 +88,22 @@ function SigmaChartView({ observed, eventsState, vol }: SigmaChartProps) {
     setHover(best);
   };
   const hovered = hover !== null && geo ? points[hover] ?? null : null;
+  const shownMarkers = xAxis === 'block' && geo ? markers : NO_MARKERS;
+  const approx = (block: bigint) => (timeOf ? ` · ≈ ${utc(timeOf(block))}` : '');
   const summary = geo
-    ? `σ_base history: ${points.length} observations, min ${fmt4(geo.yMin)}, max ${fmt4(geo.yMax)}, last ${fmt4(Number(last!.sigmaBase) / 1e18)} at block ${last!.block}`
+    ? `σ_base history: ${points.length} observations, min ${fmt4(geo.yMin)}, max ${fmt4(geo.yMax)}, last ${fmt4(Number(last!.sigmaBase) / 1e18)} at block ${last!.block}${shownMarkers.length ? `, ${shownMarkers.length} settlement ${shownMarkers.length === 1 ? 'marker' : 'markers'}` : ''}`
     : `σ_base history: ${empty.title}`;
+  const axisWord = xAxis === 'block' ? 'x = block number (≈ time)' : 'x = observation order';
   return (
     <article className="panel chart-panel">
       <div className="panel-header">
         <div>
-          <div className="eyebrow">Volatility engine · shared</div>
-          <h3>Observed σ_base</h3>
+          <div className="eyebrow">{heading.eyebrow}</div>
+          <h3>{heading.title}</h3>
         </div>
         <div className="chart-legend">
           <span className="legend-dot legend-dot--gold" />σ_base per Observed event
+          {xAxis === 'block' ? <><span className="legend-dot legend-dot--marker" />Settled (per pool)</> : null}
           <span className="legend-dot legend-dot--muted" />{points.length ? `${points.length} points` : 'no points'}
         </div>
       </div>
@@ -93,13 +119,26 @@ function SigmaChartView({ observed, eventsState, vol }: SigmaChartProps) {
               : [28, 82, 136, 190].map((y) => <line key={y} x1="0" x2={W} y1={y} y2={y} className="chart-grid" />)}
             {geo && geo.area ? <path className="sigma-area" d={geo.area} /> : null}
             {geo ? <path className="sigma-line" d={geo.line} /> : null}
+            {geo ? shownMarkers.map((m, i) => {
+              const x = geo.xOf(m.block);
+              return (
+                <g key={`${m.block}:${i}`} className="sigma-marker" data-block={m.block.toString()}>
+                  <title>{m.title}{approx(m.block)}</title>
+                  <line x1={x} x2={x} y1={PAD / 2} y2={H - PAD / 2} />
+                </g>
+              );
+            }) : null}
             {geo ? <circle className="sigma-dot" cx={geo.xs[geo.xs.length - 1]} cy={geo.ys[geo.ys.length - 1]} r={3.5} /> : null}
             {geo && hover !== null ? <line className="sigma-hover" x1={geo.xs[hover]} x2={geo.xs[hover]} y1={PAD / 2} y2={H - PAD / 2} /> : null}
             {geo && hover !== null ? <circle className="sigma-dot sigma-dot--hover" cx={geo.xs[hover]} cy={geo.ys[hover]} r={4} /> : null}
           </svg>
+          {geo ? shownMarkers.map((m, i) => (
+            // Label penanda sebagai HTML (bukan <text> SVG): svg di-stretch (preserveAspectRatio none) sehingga teks SVG akan terdistorsi.
+            <div key={`${m.block}:${i}`} className="sigma-marker-label" style={{ left: `${(geo.xOf(m.block) / W) * 100}%`, top: `${6 + (i % 3) * 14}px` }} title={`${m.title}${approx(m.block)}`}>{m.label}</div>
+          )) : null}
           {hovered && geo && hover !== null ? (
             <div className="chart-tooltip" style={{ left: `${(geo.xs[hover]! / W) * 100}%` }} role="status">
-              block {hovered.block.toString()} · σ_base {wad(hovered.sigmaBase)} · ETH {wad(hovered.priceWad, 2)} USD · round …{hovered.roundId.toString().slice(-5)}
+              block {hovered.block.toString()}{approx(hovered.block)} · σ_base {wad(hovered.sigmaBase)} · ETH {wad(hovered.priceWad, 2)} USD · round …{hovered.roundId.toString().slice(-5)}
             </div>
           ) : null}
           {!geo ? (
@@ -107,14 +146,22 @@ function SigmaChartView({ observed, eventsState, vol }: SigmaChartProps) {
           ) : null}
         </div>
       </div>
+      {xAxis === 'block' && first && last ? (
+        <div className="chart-x-labels mono" aria-label="x axis" title={timeNote}>
+          <span>block {first.block.toString()}{timeOf ? ` · ≈ ${utc(timeOf(first.block))}` : ''}</span>
+          <span>{timeOf ? '≈ time from block' : 'time needs a snapshot'}</span>
+          <span>block {last.block.toString()}{timeOf ? ` · ≈ ${utc(timeOf(last.block))}` : ''}</span>
+        </div>
+      ) : null}
       <div className="chart-footer">
         <span>
           {last
             ? `${observed.length} observations since deploy${observed.length > MAX_POINTS ? ` (chart: latest ${MAX_POINTS})` : ''} · last σ_base ${wad(last.sigmaBase)} at block ${last.block} (ETH ${wad(last.priceWad, 2)} USD)`
-            : `x = observation order · ${eventsState === 'live' ? 'scan live' : eventsState === 'scanning' ? 'scanning…' : eventsState === 'error' ? 'scan failed' : 'seed only'}`}
+            : `${axisWord} · ${eventsState === 'live' ? 'scan live' : eventsState === 'scanning' ? 'scanning…' : eventsState === 'error' ? 'scan failed' : 'seed only'}`}
         </span>
         {vol ? <LastObservation vol={vol} /> : <span>engine lastRoundId — · awaiting snapshot</span>}
       </div>
+      {timeOf && timeNote && last ? <div className="chart-note">{timeNote}</div> : null}
     </article>
   );
 }

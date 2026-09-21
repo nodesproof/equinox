@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Client } from '@chain/chain/client';
-import { BOARDS } from '@chain/deployment';
+import { BOARDS, POOLS, POOL_KEYS } from '@chain/deployment';
 import App from '@/App';
 
 // Uji asap: cangkang merender chrome testnet (brief §7.1), router hash memetakan rute, dan ChainProvider yang di-mount memakai client stub
@@ -53,6 +53,26 @@ describe('App shell', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Portfolio' })).toBeInTheDocument();
     expect(screen.getByText('Connect a wallet to see your portfolio')).toBeInTheDocument();
     expect(document.querySelector('.balance-card')).toBeNull();
+  });
+
+  it('routes #/activity and #/contracts to the live pages: empty feed stated honestly, manifest addresses without any config number', async () => {
+    window.location.hash = '#/activity';
+    const { unmount } = render(<App client={offline} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByText('No events loaded yet')).toBeInTheDocument();
+    expect(document.querySelectorAll('.events-table tbody tr')).toHaveLength(0);
+    expect(screen.getByText('≈ time needs a snapshot')).toBeInTheDocument();
+    expect(screen.getByText('No Observed events loaded yet')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Mine/ })).toBeNull();
+    unmount();
+    window.location.hash = '#/contracts';
+    render(<App client={offline} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Contracts & protocol' })).toBeInTheDocument();
+    for (const k of POOL_KEYS) expect(screen.getByText(POOLS[k].pool)).toBeInTheDocument();
+    for (const td of Array.from(document.querySelectorAll('.config-table td:not(.muted-text)'))) expect(td.textContent).not.toMatch(/\d/);
+    expect(await screen.findByText('RPC error on first load — retrying')).toBeInTheDocument();
+    expect(screen.getAllByText('RPC error — retrying').length).toBeGreaterThanOrEqual(11);
+    for (const td of Array.from(document.querySelectorAll('.config-table td:not(.muted-text)'))) expect(td.textContent).not.toMatch(/\d/);
   });
 
   it('falls back to "Not found" for unknown hashes', () => {

@@ -12,12 +12,13 @@ import Overview from '@/pages/Overview';
 import Boards from '@/pages/Boards';
 import Trade from '@/pages/Trade';
 import Portfolio from '@/pages/Portfolio';
-import ComingSoon from '@/pages/ComingSoon';
+import Activity from '@/pages/Activity';
+import Contracts from '@/pages/Contracts';
 
 // Komposisi: ChainProvider (satu snapshot per poll, brief §5) → ClockProvider (detak 1 s terpisah) → router hash → Layout → halaman.
 // Router memakai `useHashRoute` (lokasi hash tanpa `?…`) agar tautan prefill `#/trade?pool=B&series=3` / `#/boards?board=1` cocok dengan rutenya.
 // `client` hanya di-inject oleh test (stub tanpa jaringan); produksi memakai client publik default provider.
-// Activity dan Contracts ditambahkan Task 6; sampai itu ada, rutenya menampilkan placeholder "coming next" TANPA angka.
+// Enam rute hash = enam entri nav Layout; semua halaman hidup di atas provider yang sama (tidak ada placeholder lagi).
 export default function App({ client }: { client?: Client } = {}) {
   return (
     <ErrorBoundary>
@@ -33,8 +34,8 @@ export default function App({ client }: { client?: Client } = {}) {
                     <Route path="/boards" component={Boards} />
                     <Route path="/trade" component={Trade} />
                     <Route path="/portfolio" component={Portfolio} />
-                    <Route path="/activity"><ComingSoon title="Activity" detail="Event feed across pools with filters, the σ_base chart on a time axis from Observed events, and settlement markers." /></Route>
-                    <Route path="/contracts"><ComingSoon title="Contracts & protocol" detail="Every address from the deployment manifest with explorer links, live cfg() and params(), build commit, Sourcify status and documentation links." /></Route>
+                    <Route path="/activity" component={Activity} />
+                    <Route path="/contracts" component={Contracts} />
                     <Route>Not found — <a href="#/">back to overview</a></Route>
                   </Switch>
                 </Layout>

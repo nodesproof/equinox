@@ -13,8 +13,8 @@ import { AppMark } from '@/components/primitives';
 import { RpcBanner } from '@/components/Banner';
 import { buildStamp } from '@/lib/format';
 import { syncStatus } from '@/lib/sync';
+import { REPO } from '@/lib/contracts';
 
-const REPO = 'https://github.com/nodesproof/equinox';
 /** Nama jaringan untuk chrome & tombol switch — chain id-nya dari manifest (CHAIN_ID). */
 export const NETWORK_NAME = 'Arbitrum Sepolia';
 
