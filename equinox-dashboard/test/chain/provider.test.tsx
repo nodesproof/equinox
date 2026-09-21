@@ -8,7 +8,7 @@ import { readParity } from '@chain/chain/parity';
 import { readGas } from '@chain/chain/gas';
 import { loadSeed, readEvents } from '@chain/chain/events';
 import { TxFailed, connect, ensureChain, hasWallet, onWalletEvents, write } from '@chain/chain/wallet';
-import { BASE_MS, STALE_MS } from '@chain/ui/poll';
+import { BASE_MS, STALE_MS, isStale } from '@chain/ui/poll';
 import { ChainProvider, EVENTS_EVERY, MAX_LOG, useChain } from '@/chain/provider';
 import type { ChainState } from '@/chain/types';
 import { BLOCK, USER, liveGas, liveParity, liveSnapshot } from '../fixtures/snapshot';
@@ -25,6 +25,8 @@ vi.mock('@chain/chain/wallet', async (orig) => ({
 }));
 
 const fakeClient = { fake: 'injected' } as never;
+/** Akun kedua (checksum valid: hanya digit) untuk pergantian akun di tengah aksi. */
+const OTHER = '0x2222222222222222222222222222222222222222' as const;
 const probe: { current: ChainState | null } = { current: null };
 function Probe() { probe.current = useChain(); return null; }
 const mount = () => render(<ChainProvider client={fakeClient} pollMs={BASE_MS}><Probe /></ChainProvider>);
@@ -71,7 +73,7 @@ describe('ChainProvider — refresh loop (brief §5)', () => {
     expect(state().meta.refreshes).toBe(2);
   });
 
-  it('(b) an RPC failure after a success keeps the last snapshot, sets meta.error, turns stale after 60 s, backs off 30/60 s and recovers', async () => {
+  it('(b) an RPC failure after a success keeps the last snapshot, sets meta.error, is stale by isStale(lastOkMs, now) after 60 s (no 1-s tick), backs off 30/60 s and recovers', async () => {
     mount();
     await advance(0);
     const first = state().snapshot!;
@@ -82,10 +84,14 @@ describe('ChainProvider — refresh loop (brief §5)', () => {
     expect(state().snapshot).toBe(first);                     // data lama tetap di layar
     expect(state().meta).toMatchObject({ error: 'HTTP request failed.', lastOkMs: okAt, stale: false, refreshes: 1 });
     await advance(44_000);                                    // t = 59 s: belum stale (umur ≤ 60 s)
-    expect(state().meta.stale).toBe(false);
+    expect(isStale(state().meta.lastOkMs!, Date.now())).toBe(false);
     expect(vi.mocked(readSnapshot)).toHaveBeenCalledTimes(3); // backoff 30 s → percobaan #3 pada t = 45 s
-    await advance(2_000);                                     // t = 61 s: stale
-    expect(state().meta.stale).toBe(true);
+    // Tidak ada detak: meta.nowMs = jam kegagalan terakhir (t = 45 s), bukan jam dinding; context tidak dirender ulang tanpa hasil refresh baru.
+    const atFailure = state();
+    expect(atFailure.meta.nowMs).toBe(okAt + 45_000);
+    await advance(2_000);                                     // t = 61 s: stale menurut jam UI (isStale + useNow), tanpa dispatch apa pun
+    expect(isStale(state().meta.lastOkMs!, Date.now())).toBe(true);
+    expect(state()).toBe(atFailure);
     expect(state().snapshot).toBe(first);
     expect(Date.now() - state().meta.lastOkMs!).toBeGreaterThan(STALE_MS);
     // Backoff 60 s setelah kegagalan kedua: percobaan #4 pada t = 105 s — RPC pulih → error hilang, stale hilang, poll berlanjut sendiri.
@@ -138,10 +144,42 @@ describe('ChainProvider — refresh loop (brief §5)', () => {
     expect(state().snapshot).toBeNull();
     expect(state().events.trades).toHaveLength(seed.trades.length);
     expect(state().eventsState).toBe('seed');
+    expect(state().seed).toEqual({ generatedAt: seed.generatedAt, lastBlock: seed.lastBlock });
     await act(async () => { pending.resolve(liveSnapshot()); await vi.advanceTimersByTimeAsync(0); });
     expect(vi.mocked(readEvents).mock.calls[0]).toEqual([fakeClient, BLOCK, seed.lastBlock + 1n]);
     expect(state().eventsState).toBe('live');
     expect(state().events.observed).toHaveLength(seed.observed.length);
+  });
+
+  it('(c‴) a seed that lands after the first chain scan is merged (no duplicates, newer delta kept) and never lowers the scan cursor', async () => {
+    const seed = liveSeed();
+    const late = deferred<typeof seed>();
+    vi.mocked(loadSeed).mockReturnValue(late.promise);
+    // Pindaian pertama sudah selesai (dari blok deploy sampai BLOCK) sebelum seed tiba: seed hanya memuat sebagian event yang sama + tidak boleh menimpa.
+    const delta = liveEvents();
+    vi.mocked(readEvents).mockResolvedValue(delta);
+    mount();
+    await advance(0);
+    expect(state().events.trades).toHaveLength(0);           // poll belum mulai: mount menunggu loadSeed
+    await act(async () => { late.resolve({ ...seed, trades: seed.trades.slice(0, 2), lastBlock: BLOCK - 10n }); await vi.advanceTimersByTimeAsync(0); });
+    expect(state().seed).toEqual({ generatedAt: seed.generatedAt, lastBlock: BLOCK - 10n });
+    expect(vi.mocked(readEvents).mock.calls[0]).toEqual([fakeClient, BLOCK, BLOCK - 9n]);
+    expect(state().events.trades).toHaveLength(delta.trades.length);   // gabungan tanpa duplikat (seed ⊂ delta)
+    // Skenario kebalikan: pindaian menang lebih dulu (refreshNow saat seed masih menggantung) → seed digabung, kursor tetap BLOCK.
+    cleanup(); vi.mocked(readEvents).mockClear(); vi.mocked(readSnapshot).mockClear();
+    const late2 = deferred<typeof seed>();
+    vi.mocked(loadSeed).mockReturnValue(late2.promise);
+    mount();
+    act(() => state().refreshNow());
+    await advance(0);
+    expect(vi.mocked(readEvents).mock.calls[0]).toEqual([fakeClient, BLOCK, DEPLOYED_AT_BLOCK]);
+    expect(state().eventsState).toBe('live');
+    await act(async () => { late2.resolve({ ...seed, lastBlock: BLOCK - 10n }); await vi.advanceTimersByTimeAsync(0); });
+    expect(state().events.trades).toHaveLength(delta.trades.length);   // seed ⊆ delta → tidak bertambah
+    expect(state().eventsState).toBe('live');                          // seed tidak mengembalikan status ke 'seed'
+    for (let r = 1; r < EVENTS_EVERY; r++) await advance(BASE_MS);
+    await advance(BASE_MS);                                            // refresh ke-EVENTS_EVERY: delta dari BLOCK + 1, bukan seed.lastBlock + 1
+    expect(vi.mocked(readEvents).mock.calls.at(-1)).toEqual([fakeClient, BLOCK, BLOCK + 1n]);
   });
 
   it('(c″) a failed scan keeps the old feed, reports eventsState error and retries on the next refresh while nothing succeeded yet', async () => {
@@ -184,9 +222,12 @@ describe('ChainProvider — refresh loop (brief §5)', () => {
     expect(vi.mocked(readSnapshot)).toHaveBeenCalledTimes(3);
   });
 
-  it('stops polling and ticking on unmount', async () => {
+  it('stops polling on unmount; between polls the context value is stable (no 1-s tick)', async () => {
     const view = mount();
     await advance(0);
+    const settled = state();
+    await advance(5_000);
+    expect(state()).toBe(settled);                            // tidak ada dispatch tanpa hasil refresh baru
     view.unmount();
     await advance(10 * BASE_MS);
     expect(vi.mocked(readSnapshot)).toHaveBeenCalledTimes(1);
@@ -228,6 +269,17 @@ describe('ChainProvider — wallet', () => {
     expect(vi.mocked(onWalletEvents)).not.toHaveBeenCalled();
   });
 
+  it('unmount releases the EIP-1193 listener through the unsubscribe returned by onWalletEvents', async () => {
+    const off = vi.fn();
+    vi.mocked(onWalletEvents).mockReturnValue(off);
+    const view = mount();
+    await advance(0);
+    expect(vi.mocked(onWalletEvents)).toHaveBeenCalledTimes(1);
+    expect(off).not.toHaveBeenCalled();
+    view.unmount();
+    expect(off).toHaveBeenCalledTimes(1);
+  });
+
   it('connect(): requestAddresses + ensureChain → account + refresh; rejection is logged as ✗ connect; wrong chain → ensureChain only', async () => {
     vi.mocked(connect).mockResolvedValue(USER);
     mount();
@@ -257,24 +309,34 @@ describe('ChainProvider — run()', () => {
   const call = { address: POOLS.A.pool, abi: [], functionName: 'claim', args: [1n, 2n] };
   const connectUser = async () => { mount(); await advance(0); act(() => walletHandlers().accounts([USER])); await advance(0); };
 
-  it('logs a pending entry, then ✓ with the hash; captures the account at call time; refreshes after the action', async () => {
+  it('logs a pending entry, then ✓ with the hash; captures the account at call time (an accountsChanged mid-flight does not change the signer); refreshes after the action', async () => {
     await connectUser();
     const pending = deferred<`0x${string}`>();
     vi.mocked(write).mockReturnValueOnce(pending.promise);
+    const build = vi.fn(() => call);
     const before = vi.mocked(readSnapshot).mock.calls.length;
     let done: Promise<void>;
-    act(() => { done = state().run('claim 1.00 C 2800 #0 (25 Sep) on A', () => call, 'A'); });
+    act(() => { done = state().run('claim 1.00 C 2800 #0 (25 Sep) on A', build, 'A'); });
     expect(state().busy).toBe(true);
     expect(state().txLog[0]).toMatchObject({ ok: null, what: 'claim 1.00 C 2800 #0 (25 Sep) on A', tail: '' });
     await advance(0);                                          // `await build(k, acct)` → write pada microtask berikutnya
+    expect(build).toHaveBeenCalledWith('A', USER);
     expect(vi.mocked(write)).toHaveBeenCalledWith(call, USER);
+    // Wallet berganti akun SAAT tx masih menunggu: state mengikuti akun baru (+ refresh dengan akun itu), tetapi aksi yang berjalan tetap milik USER.
+    act(() => walletHandlers().accounts([OTHER]));
+    expect(state().account).toBe(OTHER);
+    await advance(0);
+    expect(vi.mocked(readSnapshot).mock.calls.length).toBe(before + 1);
+    expect(vi.mocked(readSnapshot).mock.calls.at(-1)).toEqual([fakeClient, OTHER]);
     await act(async () => { pending.resolve('0xabc'); await done; });
     expect(state().busy).toBe(false);
     expect(state().txLog).toHaveLength(1);
     expect(state().txLog[0]).toMatchObject({ ok: true, hash: '0xabc', tail: '' });
+    expect(vi.mocked(write)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(write).mock.calls[0]![1]).toBe(USER);     // bukan OTHER
     await advance(0);
-    expect(vi.mocked(readSnapshot).mock.calls.length).toBe(before + 1);
-    expect(vi.mocked(readSnapshot).mock.calls.at(-1)).toEqual([fakeClient, USER]);
+    expect(vi.mocked(readSnapshot).mock.calls.length).toBe(before + 2);   // refresh setelah aksi memakai akun yang sekarang terhubung
+    expect(vi.mocked(readSnapshot).mock.calls.at(-1)).toEqual([fakeClient, OTHER]);
   });
 
   it('rejects a second action while busy (one action at a time)', async () => {

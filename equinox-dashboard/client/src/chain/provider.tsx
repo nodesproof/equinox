@@ -7,11 +7,11 @@ import { client as defaultClient, type Client } from '@chain/chain/client';
 import { readSnapshot, type Snapshot } from '@chain/chain/snapshot';
 import { readParity, type ParityRow } from '@chain/chain/parity';
 import { readGas, type GasEstimate } from '@chain/chain/gas';
-import { loadSeed, mergeEvents, readEvents, type Events } from '@chain/chain/events';
+import { loadSeed, mergeEvents, readEvents, type EventSeed, type Events } from '@chain/chain/events';
 import { TxFailed, connect as walletConnect, decodeRevert, ensureChain, hasWallet, onWalletEvents, write } from '@chain/chain/wallet';
 import { isStale, pollBaseMs, startPolling } from '@chain/ui/poll';
 import { CHAIN_ID, DEPLOYED_AT_BLOCK, POOLS, type PoolKey } from '@chain/deployment';
-import type { BuildCall, ChainState, EventsState, Meta, TxEntry } from './types';
+import type { BuildCall, ChainState, EventsState, Meta, SeedMeta, TxEntry } from './types';
 
 /** Event dibaca pada snapshot pertama yang berhasil, lalu tiap EVENTS_EVERY refresh (≈ 60 s pada interval 15 s) — sama dengan main.ts. */
 export const EVENTS_EVERY = 4;
@@ -19,7 +19,7 @@ export const EVENTS_EVERY = 4;
 export const MAX_LOG = 50;
 
 interface State {
-  snapshot: Snapshot | null; meta: Meta; parity: ParityRow[]; gas: GasEstimate | null; events: Events; eventsState: EventsState;
+  snapshot: Snapshot | null; meta: Meta; parity: ParityRow[]; gas: GasEstimate | null; events: Events; eventsState: EventsState; seed: SeedMeta | null;
   account: Address | null; wrongChain: boolean; busy: boolean; txLog: TxEntry[];
 }
 type Action =
@@ -27,10 +27,9 @@ type Action =
   | { type: 'error'; message: string; atMs: number }
   | { type: 'parity'; rows: ParityRow[] }
   | { type: 'gas'; gas: GasEstimate | null }
-  | { type: 'seed'; events: Events }
+  | { type: 'seed'; seed: EventSeed }
   | { type: 'events'; next: Events }
   | { type: 'eventsState'; state: EventsState }
-  | { type: 'tick'; nowMs: number }
   | { type: 'account'; account: Address | null }
   | { type: 'wrongChain'; wrongChain: boolean }
   | { type: 'busy'; busy: boolean }
@@ -38,9 +37,10 @@ type Action =
 
 const initial = (nowMs: number): State => ({
   snapshot: null, meta: { nowMs, lastOkMs: null, error: null, stale: false, refreshes: 0 }, parity: [], gas: null,
-  events: { trades: [], observed: [] }, eventsState: 'seed', account: null, wrongChain: false, busy: false, txLog: [],
+  events: { trades: [], observed: [] }, eventsState: 'seed', seed: null, account: null, wrongChain: false, busy: false, txLog: [],
 });
-/** `stale` hanya bermakna bila pernah ada snapshot: umur data terakhir > STALE_MS (60 s). Sebelum snapshot pertama UI memakai `snapshot === null` (loading / gagal). */
+/** `stale` dievaluasi SAAT refresh gagal (umur data terakhir > STALE_MS pada `nowMs` kegagalan itu) — tidak berdetak; badge/banner UI
+ *  menghitung ulang dari `isStale(meta.lastOkMs, useNow())` (ClockProvider). Sebelum snapshot pertama UI memakai `snapshot === null` (loading / gagal). */
 const withNow = (meta: Meta, nowMs: number): Meta => ({ ...meta, nowMs, stale: meta.lastOkMs !== null && isStale(meta.lastOkMs, nowMs) });
 
 function reduce(s: State, a: Action): State {
@@ -51,11 +51,12 @@ function reduce(s: State, a: Action): State {
     case 'error': return { ...s, meta: withNow({ ...s.meta, error: a.message }, a.atMs) };
     case 'parity': return { ...s, parity: a.rows };
     case 'gas': return { ...s, gas: a.gas };
-    case 'seed': return { ...s, events: a.events };
+    // Seed hasil build DIGABUNG (bukan menimpa): bila pindaian rantai pertama sempat selesai lebih dulu (seed = fetch async), delta yang lebih baru
+    // tidak boleh hilang; dedupe (tx, logIndex) memastikan event yang ada di keduanya muncul sekali. Metadata seed disimpan untuk kaki halaman Activity.
+    case 'seed': return { ...s, events: mergeEvents(s.events, { trades: a.seed.trades, observed: a.seed.observed }), seed: { generatedAt: a.seed.generatedAt, lastBlock: a.seed.lastBlock } };
     // Delta inkremental digabung dengan dedupe (tx, logIndex) — pembacaan terbaru menang; trades terbaru dulu, observed urut rantai (mergeEvents).
     case 'events': return { ...s, events: mergeEvents(s.events, a.next), eventsState: 'live' };
     case 'eventsState': return { ...s, eventsState: a.state };
-    case 'tick': return { ...s, meta: withNow(s.meta, a.nowMs) };
     case 'account': return { ...s, account: a.account };
     case 'wrongChain': return { ...s, wrongChain: a.wrongChain };
     case 'busy': return { ...s, busy: a.busy };
@@ -164,13 +165,15 @@ export function ChainProvider({ client = defaultClient, pollMs, children }: Chai
   }, [client]);
 
   // Mount: seed hasil build dulu (umpan tampil seketika, pindaian pertama hanya dari lastBlock+1), baru poll dimulai — urutan yang sama dengan main.ts.
+  // `lastEventsBlockRef` hanya diisi dari seed bila masih null: bila pindaian rantai (mis. lewat refreshNow) sudah menetapkan blok yang lebih tinggi,
+  // seed tidak boleh menurunkannya (pindaian ulang rentang yang sudah dibaca).
   useEffect(() => {
     let cancelled = false;
     let stop: (() => void) | null = null;
     (async () => {
       try {
         const seed = await loadSeed();
-        if (seed && !cancelled) { lastEventsBlockRef.current = seed.lastBlock; dispatch({ type: 'seed', events: { trades: seed.trades, observed: seed.observed } }); }
+        if (seed && !cancelled) { if (lastEventsBlockRef.current === null) lastEventsBlockRef.current = seed.lastBlock; dispatch({ type: 'seed', seed }); }
       } catch (e) { console.warn('seed:', e); }
       // Poll 15 s (`?poll=` ≥ 2 s), backoff eksponensial 30 s / 60 s saat gagal, berhenti saat unmount.
       if (!cancelled) stop = startPolling(api.refreshOnce, api.onError, pollMs ?? pollBaseMs());
@@ -178,16 +181,14 @@ export function ChainProvider({ client = defaultClient, pollMs, children }: Chai
     return () => { cancelled = true; stop?.(); };
   }, [api, pollMs]);
 
-  // Detak 1 s untuk umur data/stale badge/countdown (main.ts `setInterval(paint, 1000)`).
-  useEffect(() => {
-    const id = setInterval(() => dispatch({ type: 'tick', nowMs: Date.now() }), 1000);
-    return () => clearInterval(id);
-  }, []);
+  // Tidak ada detak 1 s di context ini: umur data / badge stale / countdown dibaca UI dari `useNow()` (ClockProvider, context terpisah) —
+  // setiap konsumen useChain() hanya dirender ulang oleh perubahan data (snapshot/error/event/wallet), bukan tiap detik.
 
   // Pendengar EIP-1193: accountsChanged([]) = disconnect; chainChanged → wrongChain (kembali ke 421614 → refresh dengan akun).
+  // Cleanup melepas pendengar (removeListener) — StrictMode dev memasang/melepas dua kali tanpa menumpuk handler.
   useEffect(() => {
     if (!walletPresent) return;
-    onWalletEvents({
+    return onWalletEvents({
       accounts: (a) => api.setAccount(a[0] ?? null),
       chain: (id) => {
         const wrong = id !== CHAIN_ID;

@@ -151,9 +151,9 @@ describe('userView', () => {
 });
 
 describe('engineView & rpcBanner', () => {
-  it('ages from meta.nowMs (feed round, last engine observation, block)', () => {
+  it('ages from the caller\'s nowMs (feed round, last engine observation, block)', () => {
     const s = liveSnapshot();
-    const v = engineView(s, { nowMs: (BLOCK_TIME + 100) * 1000, lastOkMs: 0, error: null, stale: false, refreshes: 1 });
+    const v = engineView(s, (BLOCK_TIME + 100) * 1000);
     expect(v).toMatchObject({ feedAgeS: 138, blockAgeS: 100, lastObsAgeS: BLOCK_TIME + 100 - s.vol.lastTs, blockNumber: s.blockNumber });
     expect(v.vol.vrp).toBe(s.vol.vrp);
   });
@@ -171,7 +171,7 @@ describe('hooks over a fixture ChainContext', () => {
   it('usePool/usePools/useSeriesRows/useBoards/useAtm/useEngine read the snapshot; useUser follows the account', () => {
     const state = chainState({ snapshot: withUser(liveSnapshot()) });
     expect(state.account).toBe(USER);
-    const { result } = renderHook(() => ({ a: usePool('A'), all: usePools(), rows: useSeriesRows(), boards: useBoards(), atm: useAtm(), eng: useEngine(), user: useUser() }), { wrapper: wrap(state) });
+    const { result } = renderHook(() => ({ a: usePool('A'), all: usePools(), rows: useSeriesRows(), boards: useBoards(), atm: useAtm(), eng: useEngine((BLOCK_TIME + 7) * 1000), user: useUser() }), { wrapper: wrap(state) });
     expect(result.current.a!.vegaCap).toBe(derivePool(state.snapshot!.pools.A).vegaCap);
     expect(result.current.all.map((p) => p.k)).toEqual(POOL_KEYS);
     expect(result.current.rows).toHaveLength(ALL_SERIES.length);
@@ -179,11 +179,12 @@ describe('hooks over a fixture ChainContext', () => {
     expect(result.current.boards.map((b) => b.board.id)).toEqual(BOARDS.map((b) => b.id));
     expect(result.current.atm!.ref).toEqual(atmSeries(state.snapshot!)!.ref);
     expect(result.current.eng!.blockTime).toBe(BLOCK_TIME);
+    expect(result.current.eng!.blockAgeS).toBe(7);
     expect(result.current.user!.positions).toHaveLength(demoPositions().length);
   });
   it('returns null/[] before the first snapshot, and chainState(withStale) yields stale meta with data kept', () => {
     const empty = chainState({ snapshot: null });
-    const { result } = renderHook(() => ({ a: usePool('B' as PoolKey), rows: useSeriesRows(), boards: useBoards(), atm: useAtm(), eng: useEngine(), user: useUser() }), { wrapper: wrap(empty) });
+    const { result } = renderHook(() => ({ a: usePool('B' as PoolKey), rows: useSeriesRows(), boards: useBoards(), atm: useAtm(), eng: useEngine(Date.now()), user: useUser() }), { wrapper: wrap(empty) });
     expect(result.current).toEqual({ a: null, rows: [], boards: [], atm: null, eng: null, user: null });
     const stale = chainState({ snapshot: withStale(liveSnapshot()) });
     expect(stale.meta.stale).toBe(true); expect(stale.meta.error).not.toBeNull(); expect(stale.snapshot).not.toBeNull();

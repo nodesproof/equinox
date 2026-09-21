@@ -15,7 +15,7 @@ import {
 } from '@chain/chain/trade';
 import { ChainProvider, useChain } from '@/chain/provider';
 import type { ChainState } from '@/chain/types';
-import { DEBOUNCE_MS, parseAmount, useTrade, type TradeApi } from '@/chain/useTrade';
+import { BUSY_GUARD, DEBOUNCE_MS, parseAmount, useTrade, type TradeApi } from '@/chain/useTrade';
 import { USER, demoPositions, liveSnapshot, withSettled, withUser } from '../fixtures/snapshot';
 
 vi.mock('@chain/chain/client', () => ({ client: { fake: 'public-client' }, chain: { id: 421614 } }));
@@ -152,15 +152,17 @@ describe('actions → ChainState.run (calldata from @chain/chain/trade builders)
     expect(api().claimPreview('A', P2400)).toEqual({ units: WAD, payoutPerUnit: 0n, payout: 0n });
     expect(api().claimPreview('A', C2600_1)).toBeNull();
   });
-  it('run rejects a second action while busy: only the first write happens, the second is dropped silently', async () => {
+  it('a second action while busy gets the BUSY_GUARD string (nothing sent); accepted again once the first one settles', async () => {
     await mountConnected();
     const pending = deferred<`0x${string}`>();
     vi.mocked(write).mockReturnValueOnce(pending.promise);
     expect(api().actions.approve('A')).toBeNull();
     await advance(0);
     expect(vi.mocked(write)).toHaveBeenCalledTimes(1);
-    expect(api().actions.faucet('A')).toBeNull();                                        // diterima oleh useTrade, ditolak oleh run (busy)
-    expect(api().actions.buy('B', C2600_1, SIZE)).toBeNull();
+    expect(chain().busy).toBe(true);
+    expect(api().actions.faucet('A')).toBe(BUSY_GUARD);                                  // guard string, bukan null diam-diam
+    expect(api().actions.buy('B', C2600_1, SIZE)).toBe(BUSY_GUARD);
+    expect(api().actions.deposit('A', 1n)).toBe(BUSY_GUARD);
     await advance(0);
     expect(vi.mocked(write)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(executedBuy)).not.toHaveBeenCalled();

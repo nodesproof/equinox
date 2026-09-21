@@ -43,7 +43,8 @@ export interface TradeApi {
   };
   /** Pratinjau klaim (murni dari snapshot): units × payoutPerUnit / 1e18 / 1e12; null tanpa posisi/akun. */
   claimPreview(k: PoolKey, series: number | null): ClaimPreview | null;
-  /** Aksi wallet. Mengembalikan pesan guard (tidak ada yang dikirim) atau null bila aksi diserahkan ke ChainState.run (hasil lewat busy/txLog). */
+  /** Aksi wallet. Mengembalikan pesan guard (tidak ada yang dikirim: tanpa akun, aksi lain masih berjalan (`busy`), input tidak valid) atau null bila
+   *  aksi diserahkan ke ChainState.run (hasil lewat busy/txLog). */
   actions: {
     faucet(k: PoolKey): string | null;
     approve(k: PoolKey): string | null;
@@ -59,12 +60,15 @@ export interface TradeApi {
   needsApprove(k: PoolKey): boolean;
 }
 
+/** Guard saat aksi lain masih berjalan (gerbang `busy` provider) — dikembalikan sebagai string agar halaman menampilkannya inline, bukan diam-diam. */
+export const BUSY_GUARD = 'another action is still in flight — wait for its log line';
+
 export function useTrade(): TradeApi {
-  const { client, snapshot, account, run } = useChain();
+  const { client, snapshot, account, busy, run } = useChain();
   const user = useMemo(() => userView(snapshot, account), [snapshot, account]);
   // Nilai terbaru untuk closure async (pratinjau yang jalan setelah debounce membaca akun/snapshot saat itu, bukan saat diminta).
-  const latest = useRef({ client, snapshot, account, user, run });
-  latest.current = { client, snapshot, account, user, run };
+  const latest = useRef({ client, snapshot, account, busy, user, run });
+  latest.current = { client, snapshot, account, busy, user, run };
   const [previews, setPreviews] = useState<Previews>({ deposit: idle(), redeem: idle(), buy: idle(), close: idle() });
   const seq = useRef<Record<Field, number>>({ deposit: 0, redeem: 0, buy: 0, close: 0 });
   const timers = useRef<Partial<Record<Field, ReturnType<typeof setTimeout>>>>({});
@@ -141,8 +145,9 @@ export function useTrade(): TradeApi {
   }, [snapshot, user]);
 
   // Setiap aksi menangkap pool SAAT KLIK (k) dan menjalankan guard ukuran SEBELUM RPC apa pun; akun ditangkap oleh run() sinkron pada saat yang sama.
+  // Guard umum: tanpa akun → 'connect a wallet first'; aksi lain masih berjalan → BUSY_GUARD (run() juga menolaknya, tetapi diam — string ini yang tampil).
   const actions = useMemo<TradeApi['actions']>(() => {
-    const noAccount = () => (latest.current.account ? null : 'connect a wallet first');
+    const noAccount = () => (latest.current.account ? (latest.current.busy ? BUSY_GUARD : null) : 'connect a wallet first');
     return {
       faucet: (k) => {
         // Faucet hanya untuk aset ber-mint terbuka (MockUSDG di A/B); USDG Paxos (C) tidak punya mint — tautan faucet.paxos.com, tanpa panggilan on-chain.

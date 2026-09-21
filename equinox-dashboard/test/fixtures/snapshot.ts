@@ -172,6 +172,14 @@ export function withOracleStale(s: Snapshot): Snapshot {
   for (const r of n.series) for (const k of POOL_KEYS) if (!r[k].settled) { r[k].buy = null; r[k].buyError = 'OracleStale'; r[k].close = null; }
   return n;
 }
+/** Seri ke-`seriesIdx` tanpa kuotasi dengan alasan yang BERBEDA per pool (urutan `errors` = POOL_KEYS; pool di luar daftar memakai yang terakhir):
+ *  jalur "status per pool tidak digabung" (`sharedStatus` null) — mis. OracleStale di A, MathUnavailable di B, SeriesExpired di C. */
+export function withBuyErrors(s: Snapshot, seriesIdx: number, errors: string[]): Snapshot {
+  const n = clone(s);
+  const r = n.series[seriesIdx]!;
+  POOL_KEYS.forEach((k, i) => { r[k].buy = null; r[k].buyError = errors[Math.min(i, errors.length - 1)]!; r[k].close = null; });
+  return n;
+}
 export interface UserSpec { address?: Address; positions?: PositionSpec[]; asset?: Partial<Record<PoolKey, bigint>>; shares?: Partial<Record<PoolKey, bigint>>; allowance?: Partial<Record<PoolKey, bigint>> }
 /** Akun terhubung dengan default Appendix C (aset A/B 1,999,742.195639 mock, C 9.735133 Paxos; share 1e12 / 1e12 / 90e6; allowance MAX, C = MAX − 1296150; posisi demo). */
 export function withUser(s: Snapshot, u: UserSpec = {}): Snapshot {
@@ -219,7 +227,7 @@ export function chainState(over: StateOverrides = {}): ChainState {
   const { meta: _m, nowMs: _n, ...rest } = over;
   return {
     client: {} as Client, snapshot, parity: snapshot ? liveParity(snapshot) : [], gas: snapshot ? liveGas(snapshot) : null,
-    events: { trades: [], observed: [] }, eventsState: 'seed', account: snapshot?.user?.address ?? null, wrongChain: false, hasWallet: false, busy: false, txLog: [],
+    events: { trades: [], observed: [] }, eventsState: 'seed', seed: null, account: snapshot?.user?.address ?? null, wrongChain: false, hasWallet: false, busy: false, txLog: [],
     refreshNow: () => {}, connect: async () => {}, run: async () => {},
     ...rest, meta,
   };

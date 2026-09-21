@@ -8,9 +8,13 @@ import type { Events } from '@chain/chain/events';
 import type { TradeCall } from '@chain/chain/trade';
 import type { PoolKey } from '@chain/deployment';
 
-/** Metadata refresh: `nowMs` berdetak tiap 1 s; `lastOkMs` = snapshot sukses terakhir; `error` = pesan RPC terakhir (data lama tetap dipertahankan);
- *  `stale` = ada data dan umurnya > 60 s (`isStale`); `refreshes` = jumlah snapshot yang berhasil sejak mount. */
+/** Metadata refresh: `nowMs` = jam dinding hasil refresh TERAKHIR (snapshot sukses atau gagal) — tidak berdetak (jam UI = `useNow()` dari ClockProvider);
+ *  `lastOkMs` = snapshot sukses terakhir; `error` = pesan RPC terakhir (data lama tetap dipertahankan); `stale` = saat refresh terakhir gagal, umur data
+ *  sudah > 60 s (`isStale(lastOkMs, nowMs)`) — badge/banner menghitung ulang dari `isStale(lastOkMs, useNow())`; `refreshes` = jumlah snapshot sukses sejak mount. */
 export interface Meta { nowMs: number; lastOkMs: number | null; error: string | null; stale: boolean; refreshes: number }
+
+/** Metadata seed event hasil build (`public/events-seed.json`): kapan dibuat dan sampai blok mana — kaki halaman Activity; null tanpa seed. */
+export interface SeedMeta { generatedAt: string; lastBlock: bigint }
 
 /** Satu baris log transaksi. `ok === null` = masih berjalan (simulate → wallet → receipt); `hash` ada juga untuk tx yang terkirim lalu gagal (TxFailed). */
 export interface TxEntry { id: number; ok: boolean | null; what: string; tail: string; hash?: `0x${string}`; atMs: number }
@@ -31,6 +35,8 @@ export interface ChainState {
   gas: GasEstimate | null;
   events: Events;
   eventsState: EventsState;
+  /** Seed hasil build yang dimuat saat mount (digabung ke `events`); null bila tidak ada / gagal dimuat. */
+  seed: SeedMeta | null;
   account: Address | null;
   wrongChain: boolean;
   hasWallet: boolean;

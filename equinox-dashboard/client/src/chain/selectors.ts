@@ -7,7 +7,7 @@ import { atmSeries, type PoolState, type SeriesRow, type SeriesState, type Snaps
 import type { ParityRow } from '@chain/chain/parity';
 import { ALLOWANCE_MIN } from '@chain/chain/trade';
 import { useChain } from './provider';
-import type { ChainState, Meta } from './types';
+import type { ChainState } from './types';
 
 /** Aset 6 dp ↔ WAD (EquinoxPool.assetScale). */
 export const ASSET_SCALE = 10n ** 12n;
@@ -99,12 +99,14 @@ export interface BoardView {
 export function boardViews(s: Snapshot, parity: ParityRow[]): BoardView[] {
   const rows = seriesViews(s, parity);
   const k0 = POOL_KEYS[0]!;
-  return BOARDS.map((board) => {
-    const b0 = s.pools[k0].boards[board.id];
+  // `pools[k].boards` disusun snapshot.ts per POSISI di BOARDS (`BOARDS.map((_, j) => board(j))`), bukan per `board.id` — indeks dengan posisi
+  // yang sama agar tetap benar bila id manifest tidak lagi sama dengan posisinya.
+  return BOARDS.map((board, j) => {
+    const b0 = s.pools[k0].boards[j];
     const status: BoardStatus = b0?.settled ? 'settled' : board.expiry <= s.blockTime ? 'expired' : board.expiry <= s.blockTime + T_MIN ? 'blackout' : 'open';
     return {
       board, status, secondsToExpiry: board.expiry - s.blockTime,
-      settled: Object.fromEntries(POOL_KEYS.map((k) => [k, s.pools[k].boards[board.id] ?? { settled: false, settlementPrice: 0n }])) as BoardView['settled'],
+      settled: Object.fromEntries(POOL_KEYS.map((k) => [k, s.pools[k].boards[j] ?? { settled: false, settlementPrice: 0n }])) as BoardView['settled'],
       series: rows.filter((r) => r.ref.boardId === board.id),
     };
   });
@@ -149,15 +151,16 @@ export interface EngineView {
   vol: VolState;
   blockNumber: bigint;
   blockTime: number;
-  /** Umur round Chainlink terakhir (detik, dari jam dinding `meta.nowMs`). */
+  /** Umur round Chainlink terakhir (detik, dari jam dinding `nowMs` pemanggil — `useNow()`). */
   feedAgeS: number;
   /** Umur observasi engine terakhir (`lastTs`, detik). */
   lastObsAgeS: number;
   /** Umur blok snapshot (detik). */
   blockAgeS: number;
 }
-export function engineView(s: Snapshot, meta: Meta): EngineView {
-  const now = Math.floor(meta.nowMs / 1000);
+/** `nowMs` = jam dinding pemanggil (`useNow()` dari ClockProvider) — provider tidak lagi berdetak, jadi umur dihitung dari jam yang diberikan. */
+export function engineView(s: Snapshot, nowMs: number): EngineView {
+  const now = Math.floor(nowMs / 1000);
   return { feed: s.feed, vol: s.vol, blockNumber: s.blockNumber, blockTime: s.blockTime, feedAgeS: Math.max(0, now - s.feed.updatedAt), lastObsAgeS: Math.max(0, now - s.vol.lastTs), blockAgeS: Math.max(0, now - s.blockTime) };
 }
 
@@ -201,8 +204,8 @@ export function useAtm(): SeriesRow | null {
   const { snapshot } = useChain();
   return useMemo(() => (snapshot ? atmSeries(snapshot) : null), [snapshot]);
 }
-/** Engine bersama + feed + umur (detak 1 s dari meta.nowMs); null sebelum snapshot pertama. */
-export function useEngine(): EngineView | null {
-  const { snapshot, meta } = useChain();
-  return useMemo(() => (snapshot ? engineView(snapshot, meta) : null), [snapshot, meta]);
+/** Engine bersama + feed + umur pada `nowMs` (pemanggil meneruskan `useNow()` agar umur berdetak); null sebelum snapshot pertama. */
+export function useEngine(nowMs: number): EngineView | null {
+  const { snapshot } = useChain();
+  return useMemo(() => (snapshot ? engineView(snapshot, nowMs) : null), [snapshot, nowMs]);
 }
