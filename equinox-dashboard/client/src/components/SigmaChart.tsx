@@ -34,6 +34,8 @@ export interface SigmaChartProps {
   /** Catatan legenda untuk perkiraan waktu (ditampilkan bila `timeOf` ada). */
   timeNote?: string;
   heading?: { eyebrow: string; title: string };
+  /** Tingkat heading judul panel: 3 (default, di bawah h2 halaman) atau 2 (Overview: panel langsung di bawah h1 — urutan heading a11y). */
+  headingLevel?: 2 | 3;
 }
 
 /** Teks empty-state per status umpan: seed kosong, pindaian berjalan, pindaian gagal, atau memang belum ada observasi sejak deploy. */
@@ -72,7 +74,8 @@ function LastObservation({ vol }: { vol: VolState }) {
 const NO_MARKERS: ChartMarker[] = [];
 const DEFAULT_HEADING = { eyebrow: 'Volatility engine · shared', title: 'Observed σ_base' };
 
-function SigmaChartView({ observed, eventsState, vol, xAxis = 'order', markers = NO_MARKERS, timeOf = null, timeNote, heading = DEFAULT_HEADING }: SigmaChartProps) {
+function SigmaChartView({ observed, eventsState, vol, xAxis = 'order', markers = NO_MARKERS, timeOf = null, timeNote, heading = DEFAULT_HEADING, headingLevel = 3 }: SigmaChartProps) {
+  const Title = headingLevel === 2 ? 'h2' : 'h3';
   const points = useMemo(() => observed.slice(-MAX_POINTS), [observed]);
   const geo = useMemo(() => geometry(points, xAxis), [points, xAxis]);
   const [hover, setHover] = useState<number | null>(null);
@@ -99,7 +102,7 @@ function SigmaChartView({ observed, eventsState, vol, xAxis = 'order', markers =
       <div className="panel-header">
         <div>
           <div className="eyebrow">{heading.eyebrow}</div>
-          <h3>{heading.title}</h3>
+          <Title>{heading.title}</Title>
         </div>
         <div className="chart-legend">
           <span className="legend-dot legend-dot--gold" />σ_base per Observed event

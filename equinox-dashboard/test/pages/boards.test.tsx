@@ -13,7 +13,7 @@ import { columnCount } from '@/components/BoardTable';
 import { boardViews, seriesViews, type SeriesView } from '@/chain/selectors';
 import { DEFAULT_TRADE_POOL, K0, boardNote, buyCell, closeCell, deltaCell, filterSeries, isOpenSeries, oiCell, parityCell, sharedStatus, sigmaCell } from '@/lib/boards';
 import { boardsHref, tradeHref } from '@/lib/route';
-import { wadExact } from '@/lib/format';
+import { expiryLabel, wadExact } from '@/lib/format';
 import { renderWithChain } from '../render';
 import { BLOCK, liveParity, liveSnapshot, withBlackout, withExpired, withOracleStale, withSettled, withStale } from '../fixtures/snapshot';
 
@@ -37,7 +37,11 @@ describe('Boards — live snapshot', () => {
     for (const b of boards) {
       const p = panel(container, b.board.id);
       expect(within(p).getByRole('heading', { level: 3, name: `Board #${b.board.id}` })).toBeInTheDocument();
-      expect(within(p).getByText(`expiry ${utc(b.board.expiry)}`)).toBeInTheDocument();
+      // Expiry on one line ("25 Sep 2026 · 08:00 UTC"), the ISO form kept as the <time> title (Task 6b, finding 4).
+      const time = within(p).getByText(expiryLabel(b.board.expiry));
+      expect(time.tagName).toBe('TIME');
+      expect(time).toHaveAttribute('title', utc(b.board.expiry));
+      expect(time.parentElement).toHaveTextContent(`expiry ${expiryLabel(b.board.expiry)}`);
       expect(within(p).getByText(boardPill(b).text)).toBeInTheDocument();
       expect(within(p).getByText(`${b.series.length} series`)).toBeInTheDocument();
       expect(dataRows(p)).toHaveLength(b.series.length);
@@ -342,7 +346,7 @@ describe('Boards — empty states and footnote', () => {
     expect(container.querySelectorAll('article.board-panel')).toHaveLength(BOARDS.length);
     expect(dataRows(container)).toHaveLength(0);
     expect(screen.getAllByText('Awaiting snapshot').length).toBeGreaterThanOrEqual(BOARDS.length + 1);
-    for (const b of BOARDS) expect(within(panel(container, b.id)).getByText(`expiry ${utc(b.expiry)}`)).toBeInTheDocument();
+    for (const b of BOARDS) expect(within(panel(container, b.id)).getByText(expiryLabel(b.expiry))).toHaveAttribute('title', utc(b.expiry));
     expect(screen.getByText(`— of ${ALL_SERIES.length} series`)).toBeInTheDocument();
     expect(screen.getByText(/Gas: — awaiting snapshot/)).toBeInTheDocument();
     expect(screen.queryByText(/RPC error/)).toBeNull();

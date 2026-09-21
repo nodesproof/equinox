@@ -8,6 +8,7 @@ import type { GasEstimate } from '@chain/chain/gas';
 import { utc } from '@chain/ui/format';
 import { useSnapshot } from '@/chain/useSnapshot';
 import { useBoards } from '@/chain/selectors';
+import { BoardHead } from '@/components/BoardHead';
 import { BoardTable } from '@/components/BoardTable';
 import { EmptyValue, SectionHeading, SkeletonLine, StatusPill } from '@/components/primitives';
 import { DEFAULT_FILTER, boardNote, filterSeries, type BoardFilter, type TypeFilter } from '@/lib/boards';
@@ -16,20 +17,29 @@ import { queryBoard, useHashQuery } from '@/lib/route';
 
 const TYPE_CHIPS: { value: TypeFilter; label: string }[] = [{ value: 'all', label: 'Calls & puts' }, { value: 'C', label: 'Calls' }, { value: 'P', label: 'Puts' }];
 
-/** Filter bar: chip board (semua + satu per board manifest), chip C/P, toggle "Open only"; ringkasan n of m series di kanan. */
+/** Filter bar: grup chip board (semua + satu per board manifest), grup C/P, toggle "Open only"; ringkasan n of m series di kanan.
+ *  Setiap grup = label + baris chip (`.filter-group`): sebaris di desktop, label sebagai keterangan di atas chip yang membungkus di telepon. */
 function FilterBar({ filter, onChange, shown, total }: { filter: BoardFilter; onChange: (f: BoardFilter) => void; shown: number | null; total: number }) {
   const chip = (active: boolean, label: string, onClick: () => void, key: string) => (
     <button type="button" key={key} className={`filter-chip ${active ? 'filter-chip--active' : ''}`} aria-pressed={active} onClick={onClick}>{label}</button>
   );
   return (
     <div className="filter-bar" role="group" aria-label="Series filters">
-      <span className="filter-label"><Filter size={13} /> Board</span>
-      {chip(filter.board === null, 'All boards', () => onChange({ ...filter, board: null }), 'all')}
-      {BOARDS.map((b) => chip(filter.board === b.id, `#${b.id}`, () => onChange({ ...filter, board: b.id }), `b${b.id}`))}
-      <span className="filter-label filter-label--gap">Type</span>
-      {TYPE_CHIPS.map((t) => chip(filter.type === t.value, t.label, () => onChange({ ...filter, type: t.value }), t.value))}
-      <span className="filter-label filter-label--gap">State</span>
-      {chip(filter.openOnly, 'Open only', () => onChange({ ...filter, openOnly: !filter.openOnly }), 'open')}
+      <div className="filter-group">
+        <span className="filter-label"><Filter size={13} /> Board</span>
+        <div className="filter-chips">
+          {chip(filter.board === null, 'All boards', () => onChange({ ...filter, board: null }), 'all')}
+          {BOARDS.map((b) => chip(filter.board === b.id, `#${b.id}`, () => onChange({ ...filter, board: b.id }), `b${b.id}`))}
+        </div>
+      </div>
+      <div className="filter-group">
+        <span className="filter-label">Type</span>
+        <div className="filter-chips">{TYPE_CHIPS.map((t) => chip(filter.type === t.value, t.label, () => onChange({ ...filter, type: t.value }), t.value))}</div>
+      </div>
+      <div className="filter-group">
+        <span className="filter-label">State</span>
+        <div className="filter-chips">{chip(filter.openOnly, 'Open only', () => onChange({ ...filter, openOnly: !filter.openOnly }), 'open')}</div>
+      </div>
       <span className="filter-spacer" />
       <span className="filter-count mono">{shown === null ? '—' : shown} of {total} series</span>
     </div>
@@ -42,10 +52,7 @@ function BoardSkeletons({ emptyLabel }: { emptyLabel: string }) {
     <div className="board-stack">
       {BOARDS.map((b) => (
         <article className="panel board-panel" key={b.id} aria-label={`Board #${b.id}`} data-status="loading">
-          <div className="board-panel__head">
-            <div className="board-title"><div className="board-index">#{b.id}</div><div><h3>Board #{b.id}</h3><p>expiry {utc(b.expiry)}</p></div></div>
-            <div className="board-head-meta"><span className="board-series-count">{ALL_SERIES.filter((s) => s.boardId === b.id).length} series</span><EmptyValue label={emptyLabel} /></div>
-          </div>
+          <BoardHead id={b.id} expiry={b.expiry} pill={null} fallback={<EmptyValue label={emptyLabel} />} meta={`${ALL_SERIES.filter((s) => s.boardId === b.id).length} series`} />
           <div className="skeleton-rows" aria-hidden="true">{[0, 1, 2].map((i) => <SkeletonLine key={i} width={`${72 - i * 12}%`} />)}</div>
         </article>
       ))}

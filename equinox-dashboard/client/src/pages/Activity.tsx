@@ -23,17 +23,25 @@ function FilterBar({ filter, onChange, account, shown, total }: { filter: EventF
   );
   return (
     <div className="filter-bar" role="group" aria-label="Event filters">
-      <span className="filter-label"><Filter size={13} /> Pool</span>
-      {chip(filter.pool === null, 'All pools', () => onChange({ ...filter, pool: null }), 'all')}
-      {POOL_KEYS.map((k) => chip(filter.pool === k, k, () => onChange({ ...filter, pool: k }), `p${k}`))}
-      <span className="filter-label filter-label--gap">Kind</span>
-      {chip(filter.kind === null, 'All kinds', () => onChange({ ...filter, kind: null }), 'k-all')}
-      {EVENT_KINDS.map((kind) => chip(filter.kind === kind, kind, () => onChange({ ...filter, kind }), `k${kind}`))}
+      <div className="filter-group">
+        <span className="filter-label"><Filter size={13} /> Pool</span>
+        <div className="filter-chips">
+          {chip(filter.pool === null, 'All pools', () => onChange({ ...filter, pool: null }), 'all')}
+          {POOL_KEYS.map((k) => chip(filter.pool === k, k, () => onChange({ ...filter, pool: k }), `p${k}`))}
+        </div>
+      </div>
+      <div className="filter-group">
+        <span className="filter-label">Kind</span>
+        <div className="filter-chips">
+          {chip(filter.kind === null, 'All kinds', () => onChange({ ...filter, kind: null }), 'k-all')}
+          {EVENT_KINDS.map((kind) => chip(filter.kind === kind, kind, () => onChange({ ...filter, kind }), `k${kind}`))}
+        </div>
+      </div>
       {account ? (
-        <>
-          <span className="filter-label filter-label--gap"><User size={13} /> Account</span>
-          {chip(filter.mine, `Mine · ${shortAddr(account)}`, () => onChange({ ...filter, mine: !filter.mine }), 'mine', `Only events whose trader or holder is ${account} (Settled has no actor)`)}
-        </>
+        <div className="filter-group">
+          <span className="filter-label"><User size={13} /> Account</span>
+          <div className="filter-chips">{chip(filter.mine, `Mine · ${shortAddr(account)}`, () => onChange({ ...filter, mine: !filter.mine }), 'mine', `Only events whose trader or holder is ${account} (Settled has no actor)`)}</div>
+        </div>
       ) : null}
       <span className="filter-spacer" />
       <span className="filter-count mono">{shown} of {total} events</span>

@@ -26,6 +26,14 @@ export function SectionHeading({ eyebrow, title, detail, action }: { eyebrow: st
   );
 }
 
+/** Huruf Yunani (σ, Δ, α, λ, …) di dalam label yang CSS-nya `text-transform: uppercase`: kata yang memuatnya dibungkus `<span class="sym">`
+ *  (text-transform: none) agar σ tidak berubah menjadi Σ — artinya berbeda. Kata lain tetap teks biasa (tetap dihurufbesarkan oleh CSS). */
+const GREEK = /[\u0370-\u03FF]/;
+export function keepSymbols(text: string): ReactNode {
+  if (!GREEK.test(text)) return text;
+  return text.split(/(\s+)/).map((word, i) => (GREEK.test(word) ? <span key={i} className="sym">{word}</span> : word));
+}
+
 /** Nilai kosong yang jujur: "—" + label alasan (mis. "Awaiting snapshot"). */
 export function EmptyValue({ label = "Awaiting snapshot" }: { label?: string }) {
   return (

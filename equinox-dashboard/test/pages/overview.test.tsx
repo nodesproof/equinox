@@ -46,7 +46,10 @@ describe('Overview — live snapshot', () => {
     for (const k of POOL_KEYS) {
       const c = card(container, k), p = s.pools[k];
       // NAV and free liquidity sit in labelled cells (Pool C: both 90.26 in the fixture, so match by label → value).
-      expect(within(c).getByText('NAV (totalAssets)').nextElementSibling).toHaveTextContent(`${usdg(p.totalAssets)} ${POOLS[k].assetSymbol}`);
+      // "totalAssets" sits in a <span class="sym"> so the uppercase label keeps the identifier's case (Task 6b, finding 2).
+      const nav = within(c).getByText((_, el) => el?.classList.contains('data-label') === true && el.textContent === 'NAV (totalAssets)');
+      expect(within(nav).getByText('totalAssets')).toHaveClass('sym');
+      expect(nav.nextElementSibling).toHaveTextContent(`${usdg(p.totalAssets)} ${POOLS[k].assetSymbol}`);
       expect(within(c).getByText('Free liquidity').nextElementSibling).toHaveTextContent(`${usdg(p.freeLiquidity)} ${POOLS[k].assetSymbol}`);
       expect(within(c).getByRole('meter')).toHaveAttribute('aria-valuemax', '100');
       expect(within(c).getByText(new RegExp(`Vega cap .*\\(${p.cfg.vegaCapBps / 100} % of capital ref\\)`))).toBeInTheDocument();

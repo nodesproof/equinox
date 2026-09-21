@@ -1,9 +1,10 @@
 // boards.ts — helper murni halaman Boards: teks sel per kolom persis semantik `web/src/panels/board.ts` (Buy/status, Δ A|B = relDiff atau '=',
 // Close, Parity ✓/✗/—/…, OI 2 dp, σ_buy A | B | C 4 dp), filter bar, dan catatan kaki. Tidak ada matematika harga: semua angka dari snapshot/selector.
 import { GAS_KEYS, POOL_KEYS, type PoolKey } from '@chain/deployment';
-import { relDiff, usdg6, wad } from '@chain/ui/format';
+import { fmtCountdown, relDiff, usdg6, wad } from '@chain/ui/format';
 import { REVERT_TEXT } from '@chain/chain/trade';
-import { ASSET_SCALE, type SeriesView } from '@/chain/selectors';
+import { ASSET_SCALE, T_MIN, type BoardView, type SeriesStatus, type SeriesView } from '@/chain/selectors';
+import type { PillTone } from '@/components/primitives';
 
 /** Pool pertama = sumber status baris (semua pool mendaftar board yang sama) — board.ts `k0`. */
 export const K0: PoolKey = POOL_KEYS[0]!;
@@ -12,6 +13,38 @@ export const DEFAULT_TRADE_POOL: PoolKey = POOL_KEYS.find((k) => k === 'B') ?? K
 /** Δ dan Parity selalu A (Solidity) vs B (Stylus) — GAS_KEYS; kolomnya kosong ('—') bila salah satu pool tidak ada di manifest. */
 const [DELTA_A, DELTA_B] = GAS_KEYS;
 export const hasDeltaPair = () => POOL_KEYS.includes(DELTA_A) && POOL_KEYS.includes(DELTA_B);
+
+// ---------------------------------------------------------------- header board
+
+/** Nada pill per status seri/pool (SeriesDetail, Portfolio, kartu seri). */
+export const STATUS_TONE: Record<SeriesStatus, PillTone> = { open: 'good', blackout: 'warn', expired: 'warn', settled: 'gold' };
+/** Teks status seri untuk chip: `expired` selalu dijelaskan "awaiting settle". */
+export const statusText = (status: SeriesStatus) => (status === 'expired' ? 'expired — awaiting settle' : status);
+
+/** Pill status board: `text` versi penuh (desktop), `short` versi telepon ≤ 2 baris (countdown tanpa kalimat; settled = satu harga bila semua pool sama). */
+export function boardPill(b: BoardView): { tone: PillTone; text: string; short: string } {
+  switch (b.status) {
+    case 'open': { const left = fmtCountdown(b.secondsToExpiry); return { tone: 'good', text: `open · expires in ${left} (block time)`, short: `open · ${left}` }; }
+    case 'blackout': return { tone: 'warn', text: `blackout · ≤ ${T_MIN} s to expiry`, short: `blackout · ≤ ${T_MIN} s` };
+    case 'expired': return { tone: 'warn', text: 'expired — awaiting settle', short: 'expired · awaiting settle' };
+    case 'settled': {
+      const prices = POOL_KEYS.map((k) => wad(b.settled[k].settlementPrice, 2));
+      const same = prices.every((p) => p === prices[0]);
+      return { tone: 'gold', text: `settled @ ${POOL_KEYS.map((k, i) => `${prices[i]} (${k})`).join(' / ')}`, short: same ? `settled @ ${prices[0]}` : `settled @ ${prices.join(' / ')}` };
+    }
+  }
+}
+
+/** Teks sel Buy ringkas (Overview): premi 1 unit, atau ALASAN kuotasi kosong — nama revert mentah, bukan kalimat (brief §5: jangan pernah kosong). */
+export function quoteCell(r: SeriesView, k: PoolKey): string {
+  const st = r.state[k];
+  if (st.buy) return usdg6(st.buy.premium);
+  if (st.settled) return `settled @ ${usdg6(st.payoutPerUnit / ASSET_SCALE)}/unit`;
+  const status = r.status[k];
+  if (status === 'blackout') return 'blackout';
+  if (status === 'expired') return 'expired — awaiting settle';
+  return st.buyError ?? '—';
+}
 
 // ---------------------------------------------------------------- sel
 

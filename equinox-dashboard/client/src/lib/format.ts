@@ -13,5 +13,8 @@ export const gasUnits = (g: bigint | null) => (g === null ? '—' : Number(g).to
 export const wadExact = (x: bigint) => { const neg = x < 0n, a = neg ? -x : x; return `${neg ? '-' : ''}${a / WAD}.${(a % WAD).toString().padStart(18, '0')}`; };
 /** Label seri pendek tanpa tanggal: `C 2800 #0` (label bertanggal = `seriesLabel` dari `@chain/chain/trade`). */
 export const refLabel = (r: SeriesRef) => `${r.isCall ? 'C' : 'P'} ${r.strike} #${r.boardId}`;
+/** Expiry board untuk header panel: "25 Sep 2026 · 08:00 UTC" — satu baris tanpa tanda hubung yang bisa dipatahkan (menit dari `utc`, tidak ada zona lain). */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+export const expiryLabel = (ts: number) => { const d = new Date(ts * 1000); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} · ${utc(ts).slice(11, 16)} UTC`; };
 /** ISO build time (`__BUILD_TIME__`) → "2026-09-21 08:30 UTC"; string yang tidak bisa diurai dibiarkan apa adanya. */
 export const buildStamp = (iso: string) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? utc(Math.floor(ms / 1000)) : iso; };

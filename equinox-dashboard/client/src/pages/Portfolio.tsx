@@ -17,15 +17,15 @@ import type { EventsState } from '@/chain/types';
 import { useSnapshot } from '@/chain/useSnapshot';
 import { useWallet } from '@/chain/useWallet';
 import { useEvents } from '@/chain/useEvents';
-import { seriesStatus, usePools, useUser, type PoolView, type PositionView, type SeriesStatus, type UserView } from '@/chain/selectors';
+import { seriesStatus, usePools, useUser, type PoolView, type PositionView, type UserView } from '@/chain/selectors';
 import { NETWORK_NAME, WalletButton } from '@/components/Layout';
 import { accent, assetTagline } from '@/components/PoolCard';
 import { feedPill } from '@/components/EventsPreview';
-import { EmptyValue, SectionHeading, StatusPill, type PillTone } from '@/components/primitives';
+import { Scroller } from '@/components/Scroller';
+import { EmptyValue, SectionHeading, StatusPill } from '@/components/primitives';
+import { STATUS_TONE, statusText } from '@/lib/boards';
 import { tradeHref } from '@/lib/route';
 import { ALLOWANCE_MIN_TEXT, lpValue, positionKey } from '@/lib/trade';
-
-const STATUS_TONE: Record<SeriesStatus, PillTone> = { open: 'good', blackout: 'warn', expired: 'warn', settled: 'gold' };
 
 /** Nilai close on-demand satu posisi: `value` = proceeds `quoteClose(id, units)` (6 dp, indikatif), `error` = revert terdekode (mis. SeriesExpired). */
 export interface CloseValue { value: bigint | null; error: string | null; loading: boolean }
@@ -133,7 +133,7 @@ function PositionsPanel({ user, closeValues, blockTime, series, emptyLabel }: { 
         {user ? <StatusPill tone={positions.length ? 'good' : 'muted'}>{positions.length} {positions.length === 1 ? 'position' : 'positions'}</StatusPill> : <StatusPill tone="muted">{emptyLabel}</StatusPill>}
       </div>
       {positions.length && series && blockTime !== null ? (
-        <div className="table-scroll">
+        <Scroller>
           <table className="series-table positions-table">
             <thead><tr><th scope="col">Pool</th><th scope="col">Series</th><th scope="col">Units</th><th scope="col">Status</th><th scope="col">Close value now</th><th scope="col">Claimable</th><th scope="col" aria-label="Actions" /></tr></thead>
             <tbody>
@@ -144,7 +144,7 @@ function PositionsPanel({ user, closeValues, blockTime, series, emptyLabel }: { 
                     <td><span className={`pool-orb pool-orb--${accent(p.k)} pool-orb--small`} aria-label={`Pool ${p.k}`}>{p.k}</span></td>
                     <td className="mono">{seriesLabel(p.ref)}</td>
                     <td className="mono">{wad(p.units, 2)}</td>
-                    <td><StatusPill tone={STATUS_TONE[status]}>{status === 'expired' ? 'expired — awaiting settle' : status}</StatusPill></td>
+                    <td><StatusPill tone={STATUS_TONE[status]}>{statusText(status)}</StatusPill></td>
                     <td>{cell(p)}</td>
                     <td className="mono">{p.settled ? `${usdg6(p.claimable)} ${POOLS[p.k].assetSymbol}` : '—'}</td>
                     <td><span className="row-actions"><a className="soft-button" href={tradeHref(p.k, p.i)}>{p.settled ? 'Claim' : 'Close'} on Trade</a></span></td>
@@ -153,7 +153,7 @@ function PositionsPanel({ user, closeValues, blockTime, series, emptyLabel }: { 
               })}
             </tbody>
           </table>
-        </div>
+        </Scroller>
       ) : (
         <div className="empty-state">
           <div className="empty-state__icon"><Layers size={19} /></div>
@@ -175,7 +175,7 @@ function HistoryPanel({ trades, eventsState, account }: { trades: TradeEvent[]; 
         <StatusPill tone={pill.tone}>{pill.text}</StatusPill>
       </div>
       {trades.length ? (
-        <div className="table-scroll">
+        <Scroller>
           <table className="series-table history-table">
             <thead><tr><th scope="col">Kind</th><th scope="col">Pool</th><th scope="col">Series</th><th scope="col">Amount</th><th scope="col">Block</th><th scope="col">Tx</th></tr></thead>
             <tbody>
@@ -191,7 +191,7 @@ function HistoryPanel({ trades, eventsState, account }: { trades: TradeEvent[]; 
               ))}
             </tbody>
           </table>
-        </div>
+        </Scroller>
       ) : (
         <div className="empty-state">
           <div className="empty-state__icon"><History size={19} /></div>

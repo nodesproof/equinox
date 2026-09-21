@@ -21,11 +21,14 @@ export function AmountInput({ id, label, value, onChange, suffix, placeholder, d
   return (
     <div className="amount-input">
       <label className="control-label" htmlFor={id}>{label}</label>
-      <div className="input-with-suffix">
+      <div className={`input-with-suffix ${max ? 'input-with-suffix--max' : ''}`}>
         <input id={id} type="text" inputMode="decimal" autoComplete="off" spellCheck={false} value={value} placeholder={placeholder} disabled={disabled}
           aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} />
-        {max ? <button type="button" className="input-max" onClick={max.onClick} disabled={max.disabled} title={max.title} aria-label={`${max.title ?? 'Use the maximum'}`}>max</button> : null}
-        <span aria-hidden="true">{suffix}</span>
+        {/* Hiasan kanan (tombol max + satuan) satu baris rata kanan; padding-right input mengikuti modifier --max agar placeholder tidak tertutup. */}
+        <div className="input-adorn">
+          {max ? <button type="button" className="input-max" onClick={max.onClick} disabled={max.disabled} title={max.title} aria-label={`${max.title ?? 'Use the maximum'}`}>max</button> : null}
+          <span aria-hidden="true">{suffix}</span>
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 // EventsTable.tsx — tabel umpan event halaman Activity: Pool, Kind, Series, Amount, Block (+ ≈ waktu bila ada snapshot), Tx ↗, Actor ↗ —
 // kolom & teks sel = panel Activity klasik (`web/src/panels/activity.ts`), baris milik akun terhubung ditandai. Terbaru dulu, MAX_ROWS baris
 // pertama lalu tombol "Show more" (klasik memotong di 30). Empty-state jujur: per `eventsState` bila umpan kosong, "no match" bila filter menyaring semua.
+// ≤ 640 px (usePhone) tabel diganti daftar kartu (teks sel yang sama: pool, kind, seri, amount, blok, ≈ waktu, tx, aktor); tablet: Scroller berpudar.
 import { memo, useEffect, useState } from 'react';
 import type { Address } from 'viem';
 import { Activity, Filter } from 'lucide-react';
@@ -10,7 +11,9 @@ import { shortAddr, shortHash, utc } from '@chain/ui/format';
 import type { EventsState } from '@/chain/types';
 import { accent } from '@/components/PoolCard';
 import { feedPill } from '@/components/EventsPreview';
+import { Scroller } from '@/components/Scroller';
 import { StatusPill } from '@/components/primitives';
+import { usePhone } from '@/hooks/useMediaQuery';
 import { countNote, isMine, scanNote } from '@/lib/activity';
 
 /** Teks amount klasik dipecah pada " · " agar hanya membungkus di pemisah (textContent tetap = teks asli). */
@@ -33,8 +36,37 @@ export interface EventsTableProps {
   onClear: () => void;
 }
 
+/** Kartu event untuk telepon: baris 1 orb pool + kind + seri (+ "you"), baris 2 amount, baris 3 blok · ≈ waktu · tx ↗ · aktor ↗. */
+function EventCards({ shown, account, timeOf }: { shown: TradeEvent[]; account: Address | null; timeOf: EventsTableProps['timeOf'] }) {
+  return (
+    <ul className="event-cards" aria-label="Pool events">
+      {shown.map((t) => {
+        const mine = isMine(t, account);
+        return (
+          <li key={`${t.tx}:${t.logIndex}`} className={`event-card ${mine ? 'event-card--mine' : ''}`} data-kind={t.kind} data-pool={t.pool} data-mine={mine ? 'true' : undefined}>
+            <div className="event-card__head">
+              <span className={`pool-orb pool-orb--${accent(t.pool)} pool-orb--small`} title={POOLS[t.pool].label} aria-label={`Pool ${t.pool}`}>{t.pool}</span>
+              <strong>{t.kind}</strong>
+              <span className="mono">{t.label}</span>
+              {mine ? <StatusPill tone="gold" title="trader / holder = the connected account">you</StatusPill> : null}
+            </div>
+            <div className="event-card__amount mono">{amountParts(t.amount)}</div>
+            <div className="event-card__meta">
+              <span className="mono">block {t.block.toString()}</span>
+              <span className="mono muted-text">{timeOf ? `≈ ${utc(timeOf(t.block))}` : 'time needs a snapshot'}</span>
+              <a className="mono" href={explorerTx(t.tx)} target="_blank" rel="noopener noreferrer" title={t.tx}>{shortHash(t.tx)} ↗</a>
+              {t.who ? <a className="mono" href={explorerAddress(t.who)} target="_blank" rel="noopener noreferrer" title={t.who}>by {shortAddr(t.who)} ↗</a> : <span className="muted-text">no actor (settle)</span>}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function EventsTableView({ rows, total, eventsState, account, timeOf, filtered, onClear }: EventsTableProps) {
   const [limit, setLimit] = useState(MAX_ROWS);
+  const phone = usePhone();
   // Filter/umpan berganti → kembali ke halaman pertama.
   useEffect(() => { setLimit(MAX_ROWS); }, [rows]);
   const shown = rows.slice(0, limit);
@@ -46,8 +78,8 @@ function EventsTableView({ rows, total, eventsState, account, timeOf, filtered, 
         <div><div className="eyebrow">Event feed</div><h3>Pool events · {POOL_KEYS.join(' | ')}</h3></div>
         <StatusPill tone={pill.tone}>{pill.text}</StatusPill>
       </div>
-      {shown.length ? (
-        <div className="table-scroll">
+      {shown.length && phone ? <EventCards shown={shown} account={account} timeOf={timeOf} /> : shown.length ? (
+        <Scroller>
           <table className="series-table events-table">
             <thead><tr><th scope="col">Pool</th><th scope="col">Kind</th><th scope="col">Series</th><th scope="col">Amount</th><th scope="col">Block</th><th scope="col" title="Approximate — derived from the snapshot block time, not a chain timestamp">≈ Time (UTC)</th><th scope="col">Tx</th><th scope="col">Actor</th></tr></thead>
             <tbody>
@@ -68,7 +100,7 @@ function EventsTableView({ rows, total, eventsState, account, timeOf, filtered, 
               })}
             </tbody>
           </table>
-        </div>
+        </Scroller>
       ) : filtered && rows.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state__icon"><Filter size={19} /></div>

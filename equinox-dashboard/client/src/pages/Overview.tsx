@@ -58,14 +58,15 @@ function ExpiryMetric({ snapshot, boards, emptyLabel }: { snapshot: Snapshot | n
   );
 }
 
-/** Panel engine: rumus σ_mark(u) + parameter `params()` dari snapshot.vol (VRP, α, spread, σ_min/σ_max, λ) dan observasi terakhir — tidak ada literal. */
+/** Panel engine: rumus σ_mark(u) + parameter `params()` dari snapshot.vol (VRP, α, spread, σ_min/σ_max, λ) dan observasi terakhir — tidak ada literal.
+ *  Judulnya h2 (bukan h3): panel ini dan grafik σ_base berada langsung di bawah h1 halaman, sebelum h2 seksi pertama (urutan heading a11y). */
 function EnginePanel({ vol, emptyLabel }: { vol: VolState | null; emptyLabel: string }) {
   const row = (label: string, value: string | null, unit?: string) => (
     <div><span>{label}</span><strong>{value === null ? <EmptyValue label={emptyLabel} /> : <>{value}{unit ? <span className="param-unit">{unit}</span> : null}</>}</strong></div>
   );
   return (
     <article className="panel engine-panel">
-      <div className="panel-header"><div><div className="eyebrow">Engine parameters</div><h3>Endogenous volatility</h3></div><span className="chip chip--muted">params() on-chain</span></div>
+      <div className="panel-header"><div><div className="eyebrow">Engine parameters</div><h2>Endogenous volatility</h2></div><span className="chip chip--muted">params() on-chain</span></div>
       <div className="engine-equation"><span>σ_mark(u)</span><strong>= clamp(σ_base, σ_min, σ_max) × VRP × (1 + α·u)</strong></div>
       <div className="param-list">
         {row('VRP multiplier', vol ? wad(vol.vrp, 2) : null, '×')}
@@ -113,7 +114,7 @@ export default function Overview() {
       </section>
 
       <div className="two-col two-col--wide">
-        <SigmaChart observed={observed} eventsState={eventsState} vol={vol} />
+        <SigmaChart observed={observed} eventsState={eventsState} vol={vol} headingLevel={2} />
         <EnginePanel vol={vol} emptyLabel={emptyLabel} />
       </div>
 

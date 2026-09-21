@@ -3,13 +3,11 @@
 import type { CSSProperties } from 'react';
 import { GAS_KEYS, POOLS, POOL_KEYS, type PoolKey } from '@chain/deployment';
 import { relDiff, usdg6, wad } from '@chain/ui/format';
-import { ASSET_SCALE, type SeriesStatus, type SeriesView } from '@/chain/selectors';
-import { StatusPill, type PillTone } from '@/components/primitives';
-import { buyCell, oiCell, parityCell } from '@/lib/boards';
+import { ASSET_SCALE, type SeriesView } from '@/chain/selectors';
+import { StatusPill } from '@/components/primitives';
+import { STATUS_TONE, buyCell, oiCell, parityCell, statusText } from '@/lib/boards';
 import { wadExact } from '@/lib/format';
 import { tradeHref } from '@/lib/route';
-
-const STATUS_TONE: Record<SeriesStatus, PillTone> = { open: 'good', blackout: 'warn', expired: 'warn', settled: 'gold' };
 
 /** Greeks satu pool: label → nilai; tanpa kuotasi → alasan (teks sel Buy) + OI/payout. */
 function PoolGreeks({ r, k }: { r: SeriesView; k: PoolKey }) {
@@ -20,7 +18,7 @@ function PoolGreeks({ r, k }: { r: SeriesView; k: PoolKey }) {
     <section className="series-detail__pool" aria-label={`Pool ${k} Greeks`}>
       <header className="series-detail__head">
         <strong>Pool {k}</strong>
-        <StatusPill tone={STATUS_TONE[status]}>{status === 'expired' ? 'expired — awaiting settle' : status}</StatusPill>
+        <StatusPill tone={STATUS_TONE[status]}>{statusText(status)}</StatusPill>
       </header>
       {q ? (
         <dl className="greeks">

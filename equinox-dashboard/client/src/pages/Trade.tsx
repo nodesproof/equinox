@@ -5,7 +5,7 @@
 // Prefill `#/trade?pool=B&series=3` saat mount dan setiap hashchange; keempat pratinjau diterbitkan ulang setiap snapshot baru (putusan Task 2).
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { formatUnits, type Address } from 'viem';
-import { ChevronDown, Droplets, ShieldCheck, Zap } from 'lucide-react';
+import { ChevronDown, Droplets, Info, ShieldCheck, Zap } from 'lucide-react';
 import { CHAIN_ID, PAXOS_FAUCET, POOLS, type PoolKey } from '@chain/deployment';
 import { usdg, usdg6, wad } from '@chain/ui/format';
 import { assetLabel, seriesLabel } from '@chain/chain/trade';
@@ -19,6 +19,7 @@ import { PoolSwitch } from '@/components/PoolSwitch';
 import { PreviewLine } from '@/components/PreviewLine';
 import { TxLog } from '@/components/TxLog';
 import { SectionHeading, StatusPill } from '@/components/primitives';
+import { usePhone } from '@/hooks/useMediaQuery';
 import { DEFAULT_TRADE_POOL } from '@/lib/boards';
 import { queryPool, querySeries, useHashQuery } from '@/lib/route';
 import {
@@ -50,6 +51,28 @@ export function TradeNote({ hasWallet }: { hasWallet: boolean }) {
       {mock.length ? <> {mock.length > 1 ? 'Pools' : 'Pool'} {listPools(mock)} settle in mock USDG (faucet button);</> : null}
       {paxos.length ? <> Pool {listPools(paxos)} settles in real Paxos USDG — no mint here, get 100 USDG/day at {ext(PAXOS_FAUCET, 'faucet.paxos.com ↗')}.</> : null}
     </p>
+  );
+}
+
+const INTRO = `Every action is simulated first (eth_call) and written through your wallet; one action at a time. Buy and close previews are indicative view quotes — the ${SLIPPAGE_PCT} caps in the calldata come from a simulation of the executed path (newest Chainlink round).`;
+
+/** Telepon: intro + paragraf wallet dilipat menjadi satu kartu pemberitahuan ringkas (dua baris) dengan disclosure "How it works" (TradeNote yang sama di dalamnya). */
+function TradeIntroCard({ hasWallet }: { hasWallet: boolean }) {
+  const lead = hasWallet
+    ? 'Every action is simulated first (eth_call), then written through your wallet — one action at a time.'
+    : 'No injected wallet found — the panel is read-only; boards and quotes stay readable.';
+  return (
+    <details className={`notice-card ${hasWallet ? '' : 'notice-card--warn'}`} data-testid="trade-intro">
+      <summary>
+        <span className="notice-card__icon"><Info size={14} aria-hidden="true" /></span>
+        <span className="notice-card__lead">{lead}</span>
+        <span className="notice-card__more">How it works <ChevronDown size={14} aria-hidden="true" /></span>
+      </summary>
+      <div className="notice-card__body">
+        <p className="trade-note">{INTRO}</p>
+        <TradeNote hasWallet={hasWallet} />
+      </div>
+    </details>
   );
 }
 
@@ -146,13 +169,13 @@ export default function Trade() {
   const switchPool = (k: PoolKey) => { setPool(k); setGuards({}); };
   const mint = info.faucet === 'mint';
   const approve = needsApprove(pool);
+  const phone = usePhone();
 
   return (
     <div className="page-stack">
-      <SectionHeading eyebrow={`Trade from your wallet · ${NETWORK_NAME}`} title="Trade"
-        detail={`Every action is simulated first (eth_call) and written through your wallet; one action at a time. Buy and close previews are indicative view quotes — the ${SLIPPAGE_PCT} caps in the calldata come from a simulation of the executed path (newest Chainlink round).`}
+      <SectionHeading eyebrow={`Trade from your wallet · ${NETWORK_NAME}`} title="Trade" detail={phone ? undefined : INTRO}
         action={<div className="trade-status">{wrongChain ? <StatusPill tone="warn">wrong network</StatusPill> : account ? <StatusPill tone="good">connected</StatusPill> : hasWallet ? <StatusPill tone="muted">not connected</StatusPill> : <StatusPill tone="warn" title="No injected wallet found — the panel is read-only">read-only · no wallet</StatusPill>}{hasWallet ? <WalletButton /> : null}</div>} />
-      <TradeNote hasWallet={hasWallet} />
+      {phone ? <TradeIntroCard hasWallet={hasWallet} /> : <TradeNote hasWallet={hasWallet} />}
 
       <article className="panel pool-panel">
         <div className="field-group pool-panel__group">

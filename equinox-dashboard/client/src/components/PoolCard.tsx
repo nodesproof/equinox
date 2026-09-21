@@ -46,7 +46,7 @@ function PoolCardView({ k, pool, emptyLabel = 'Awaiting snapshot' }: PoolCardPro
       </div>
       <div className="pool-card__nav">
         <div>
-          <span className="data-label">NAV (totalAssets)</span>
+          <span className="data-label">NAV (<span className="sym">totalAssets</span>)</span>
           <strong>{pool ? <>{usdg(pool.totalAssets)} <small>{sym}</small></> : <EmptyValue label={emptyLabel} />}</strong>
         </div>
         <div>
@@ -60,7 +60,7 @@ function PoolCardView({ k, pool, emptyLabel = 'Awaiting snapshot' }: PoolCardPro
           <div className="meter-fill" style={{ width: `${Math.min(100, Math.max(0, utilPct))}%` }} />
         </div>
         <div className="meter-foot">
-          <span>Vega cap {pool ? `${wad(pool.vegaCap, 0)} (${bpsPct(pool.cfg.vegaCapBps)} of capital ref)` : '—'}</span>
+          <span>Vega cap {pool ? `${Number(wad(pool.vegaCap, 0)).toLocaleString('en-US')} (${bpsPct(pool.cfg.vegaCapBps)} of capital ref)` : '—'}</span>
           <span>Reserve {pool ? `${pct(pool.reserveUtil)} of cap ${usdg(pool.reserveCap / ASSET_SCALE)} (${bpsPct(pool.cfg.maxUtilBps)})` : '—'}</span>
         </div>
       </div>
