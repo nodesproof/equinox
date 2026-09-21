@@ -1,5 +1,5 @@
 // SigmaTimeline.tsx — garis waktu σ_base halaman Activity: SigmaChart yang sama (satu implementasi grafik) dalam mode sumbu blok, dengan
-// penanda Settled dari umpan event dan perkiraan waktu blok (`blockTime − (snapshotBlock − blok) × 0.25 s`, selalu "≈") dari snapshot.
+// penanda Settled dari umpan event dan perkiraan waktu blok (interpolasi linear blok/waktu deploy manifest ↔ blok/waktu snapshot, selalu "≈").
 // Tanpa snapshot → hanya nomor blok pada label; tanpa observasi → empty-state jujur SigmaChart.
 import { memo, useMemo } from 'react';
 import type { ObservedEvent, TradeEvent } from '@chain/chain/events';

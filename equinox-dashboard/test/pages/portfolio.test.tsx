@@ -10,6 +10,7 @@ import { seriesLabel } from '@chain/chain/trade';
 import { shortAddr, shortHash, usdg, usdg6, wad } from '@chain/ui/format';
 import Portfolio, { ownTrades } from '@/pages/Portfolio';
 import { poolView, userView } from '@/chain/selectors';
+import { DEFAULT_TRADE_POOL } from '@/lib/boards';
 import { tradeHref } from '@/lib/route';
 import { lpValue, positionKey } from '@/lib/trade';
 import { Providers, renderWithChain } from '../render';
@@ -71,6 +72,7 @@ describe('Portfolio — connected account', () => {
     const account = screen.getByLabelText('Connected account');
     expect(account).toHaveTextContent(USER);
     expect(within(account).getByRole('link', { name: /Arbiscan/ })).toHaveAttribute('href', explorerAddress(USER));
+    expect(within(account).getByRole('link', { name: /^Trade/ })).toHaveAttribute('href', tradeHref(DEFAULT_TRADE_POOL));
     for (const k of POOL_KEYS) {
       const card = screen.getByLabelText(`Pool ${k} balances`);
       const pool = poolView(s, k);
@@ -91,7 +93,8 @@ describe('Portfolio — connected account', () => {
     expect(screen.getByText(`${positions.length} positions`)).toBeInTheDocument();
     expect(readContract).toHaveBeenCalledTimes(positions.length);
     for (const p of positions) {
-      expect(readContract).toHaveBeenCalledWith(expect.objectContaining({ address: POOLS[p.k].pool, functionName: 'quoteClose', args: [p.ref.id[p.k], p.units] }));
+      // Pinned to the snapshot block (the footnote says "read on demand at the snapshot block").
+      expect(readContract).toHaveBeenCalledWith(expect.objectContaining({ address: POOLS[p.k].pool, functionName: 'quoteClose', args: [p.ref.id[p.k], p.units], blockNumber: s.blockNumber }));
       const tr = container.querySelector<HTMLElement>(`tr[data-position="${positionKey(p)}"]`)!;
       expect(tr).toHaveAttribute('data-status', 'open');
       expect(cells(tr).slice(0, 6)).toEqual([p.k, seriesLabel(p.ref), wad(p.units, 2), 'open', `${usdg6(p.units / ASSET_SCALE)} ${POOLS[p.k].assetSymbol}`, '—']);

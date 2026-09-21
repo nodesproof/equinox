@@ -46,13 +46,15 @@ function FilterBar({ filter, onChange, shown, total }: { filter: BoardFilter; on
   );
 }
 
-/** Kerangka sebelum snapshot: header board dari manifest (id, expiry) + alasan; tidak ada angka. */
-function BoardSkeletons({ emptyLabel }: { emptyLabel: string }) {
+/** Kerangka sebelum snapshot: header board dari manifest (id, expiry) + alasan; tidak ada angka. Mengikuti filter board yang sama dengan `filtered`
+ *  (deep link `?board=` pada muat dingin) agar panel tidak berpindah saat snapshot pertama tiba; jumlah seri = manifest yang lolos filter C/P. */
+function BoardSkeletons({ emptyLabel, filter }: { emptyLabel: string; filter: BoardFilter }) {
+  const count = (id: number) => ALL_SERIES.filter((s) => s.boardId === id && (filter.type === 'all' || (filter.type === 'C') === s.isCall)).length;
   return (
     <div className="board-stack">
-      {BOARDS.map((b) => (
+      {BOARDS.filter((b) => filter.board === null || b.id === filter.board).map((b) => (
         <article className="panel board-panel" key={b.id} aria-label={`Board #${b.id}`} data-status="loading">
-          <BoardHead id={b.id} expiry={b.expiry} pill={null} fallback={<EmptyValue label={emptyLabel} />} meta={`${ALL_SERIES.filter((s) => s.boardId === b.id).length} series`} />
+          <BoardHead id={b.id} expiry={b.expiry} pill={null} fallback={<EmptyValue label={emptyLabel} />} meta={`${count(b.id)} series`} />
           <div className="skeleton-rows" aria-hidden="true">{[0, 1, 2].map((i) => <SkeletonLine key={i} width={`${72 - i * 12}%`} />)}</div>
         </article>
       ))}
@@ -101,7 +103,7 @@ export default function Boards() {
         detail={`${BOARDS.length} boards · ${ALL_SERIES.length} series in the manifest. Buy and close quotes are indicative view quotes per 1.0 unit at each pool's own inventory (${POOL_KEYS.join(', ')}), read from one block-pinned snapshot; Δ and Parity compare ${GAS_KEYS[0]} (Solidity) with ${GAS_KEYS[1]} (Stylus).`}
         action={snapshot ? <StatusPill tone="good" title={`Snapshot block ${snapshot.blockNumber} · ${utc(snapshot.blockTime)}`}><Layers size={12} /> block {snapshot.blockNumber.toString()} · {utc(snapshot.blockTime)}</StatusPill> : <StatusPill tone="muted">{emptyLabel}</StatusPill>} />
       <FilterBar filter={filter} onChange={setFilter} shown={snapshot ? shown : null} total={snapshot ? total : ALL_SERIES.filter((s) => filter.board === null || s.boardId === filter.board).length} />
-      {snapshot === null ? <BoardSkeletons emptyLabel={emptyLabel} /> : (
+      {snapshot === null ? <BoardSkeletons emptyLabel={emptyLabel} filter={filter} /> : (
         <div className="board-stack">
           {filtered.map(({ board, rows }) => <BoardTable key={board.board.id} board={board} rows={rows} />)}
         </div>

@@ -1,5 +1,6 @@
 // TxLog.tsx — log transaksi sesi ini dari ChainState.txLog (terbaru di depan, maks 50): `✓ what — tx 0x… ↗` / `✗ what — pesan decodeRevert [tx ↗]`
-// / `… what — pending`. Region aria-live agar hasil aksi diumumkan; tautan Arbiscan untuk setiap hash (juga tx yang terkirim lalu gagal — TxFailed).
+// / `… what — pending`. Region aria-live SELALU dirender (juga saat kosong) agar pembaca layar sudah berlangganan sebelum baris pertama masuk —
+// teks kosong berdiri di sampingnya, bukan menggantikannya; tautan Arbiscan untuk setiap hash (juga tx yang terkirim lalu gagal — TxFailed).
 import { memo } from 'react';
 import { ExternalLink, Inbox } from 'lucide-react';
 import { explorerTx } from '@chain/deployment';
@@ -19,21 +20,20 @@ function TxLogView({ entries, busy = false }: TxLogProps) {
         <div><div className="eyebrow">Transaction log</div><h3>Your actions this session</h3></div>
         {busy ? <StatusPill tone="warn">action in flight</StatusPill> : entries.length ? <StatusPill tone={failed ? 'bad' : 'good'}>{entries.length} {entries.length === 1 ? 'entry' : 'entries'}{failed ? ` · ${failed} failed` : ''}</StatusPill> : <StatusPill tone="muted">idle</StatusPill>}
       </div>
-      {entries.length ? (
-        <ol className="txlog" aria-live="polite" aria-relevant="additions text">
-          {entries.map((e) => {
-            const state = txLineState(e);
-            const tail = txLineTail(e);
-            return (
-              <li key={e.id} className={`txlog__line txlog__line--${state}`} data-state={state} title={`${hms(e.atMs)}`}>
-                <span className="txlog__text">{txLinePrefix(e)}{tail ? <span className="muted">{tail}</span> : null}{tail && e.hash ? ' ' : null}
-                  {e.hash ? <a href={explorerTx(e.hash)} target="_blank" rel="noopener noreferrer" title={e.hash}>tx {shortHash(e.hash)} ↗</a> : null}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      ) : (
+      <ol className="txlog" aria-live="polite" aria-relevant="additions text" aria-label="Transaction log entries">
+        {entries.map((e) => {
+          const state = txLineState(e);
+          const tail = txLineTail(e);
+          return (
+            <li key={e.id} className={`txlog__line txlog__line--${state}`} data-state={state} title={`${hms(e.atMs)}`}>
+              <span className="txlog__text">{txLinePrefix(e)}{tail ? <span className="muted">{tail}</span> : null}{tail && e.hash ? ' ' : null}
+                {e.hash ? <a href={explorerTx(e.hash)} target="_blank" rel="noopener noreferrer" title={e.hash}>tx {shortHash(e.hash)} ↗</a> : null}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {entries.length ? null : (
         <div className="tx-empty"><Inbox size={15} /><span>No transactions yet.</span><small>Every action is simulated first; a decoded revert or the confirmed hash lands here with an <ExternalLink size={10} aria-hidden="true" /> Arbiscan link.</small></div>
       )}
     </article>

@@ -6,7 +6,7 @@
 // parameter (nilai per pool + arti); tablet: Scroller berpudar.
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { BookOpen, Check, Copy, ExternalLink, FileCode2, GitCommitHorizontal, ScrollText, ShieldCheck } from 'lucide-react';
+import { BookOpen, Check, Copy, ExternalLink, FileCode2, GitCommitHorizontal, ScrollText, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { BUILD_TIME, CHAIN_ID, COMMIT, DEPLOYED_AT_BLOCK, POOLS, POOL_KEYS, RPC_URL, explorerAddress, type PoolKey } from '@chain/deployment';
 import { rpcOverride } from '@chain/chain/client';
 import type { PoolCfg } from '@chain/chain/snapshot';
@@ -17,7 +17,7 @@ import { Scroller } from '@/components/Scroller';
 import { EmptyValue, SectionHeading, StatusPill } from '@/components/primitives';
 import { usePhone } from '@/hooks/useMediaQuery';
 import { buildStamp } from '@/lib/format';
-import { CFG_FIELDS, DOCS, REPO, addressGroups, addressRows, cfgIdentical, cfgRows, commitUrl, docUrl, engineRows, honestySentences, sourcifyUrl, type ParamRow } from '@/lib/contracts';
+import { CFG_FIELDS, DOCS, REPO, addressGroups, addressRows, cfgIdentical, cfgRows, commitUrl, docUrl, engineRows, honestySentences, sourcifyUrl, type DocIcon, type ParamRow } from '@/lib/contracts';
 
 /** Tombol salin alamat (kartu telepon): clipboard API + toast; tanpa clipboard (http tanpa TLS / izin) → toast menjelaskan cara manual. */
 function CopyButton({ value, label }: { value: string; label: string }) {
@@ -176,14 +176,16 @@ function BuildPanel() {
   );
 }
 
+/** Ikon per `DocLink.icon` (kunci di lib/contracts.ts, komponen lucide di sini). */
+const DOC_ICONS: Record<DocIcon, LucideIcon> = { book: BookOpen, code: FileCode2, scroll: ScrollText, shield: ShieldCheck };
+
 function DocsPanel() {
-  const icons = [BookOpen, FileCode2, ScrollText, BookOpen, ScrollText, ShieldCheck];
   return (
     <article className="panel docs-panel" aria-label="Documentation">
       <div className="panel-header"><div><div className="eyebrow">Documentation</div><h3>Read the protocol</h3></div><a className="soft-button" href={REPO} target="_blank" rel="noopener noreferrer">GitHub <ExternalLink size={11} /></a></div>
       <div className="docs-grid">
-        {DOCS.map((d, i) => { const Icon = icons[i] ?? BookOpen; return (
-          <a key={d.path} href={docUrl(d)} target="_blank" rel="noopener noreferrer" title={docUrl(d)}><Icon size={15} /><span><strong>{d.label}</strong><small>{d.detail}</small></span><ExternalLink /></a>
+        {DOCS.map((d) => { const Icon = DOC_ICONS[d.icon]; return (
+          <a key={d.path} href={docUrl(d)} target="_blank" rel="noopener noreferrer" title={docUrl(d)} data-icon={d.icon}><Icon size={15} /><span><strong>{d.label}</strong><small>{d.detail}</small></span><ExternalLink /></a>
         ); })}
       </div>
     </article>

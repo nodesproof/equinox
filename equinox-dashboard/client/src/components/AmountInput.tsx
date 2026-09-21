@@ -1,5 +1,6 @@
 // AmountInput.tsx — input jumlah desimal berlabel (USDG / shares / units) dengan sufiks satuan dan tombol "max" opsional.
 // Nilai tetap string (dikendalikan halaman); parsing ke bigint dilakukan pemanggil lewat `parseAmount` agar guard/pratinjau melihat input mentah.
+// Nama aksesibel input = label + satuan (`aria-labelledby` label & sufiks): pembaca layar mendengar "Size units" / "Amount (USDG (mock)) USDG".
 import type { ReactNode } from 'react';
 
 export interface AmountInputProps {
@@ -18,16 +19,17 @@ export interface AmountInputProps {
 }
 
 export function AmountInput({ id, label, value, onChange, suffix, placeholder, disabled = false, describedBy, max = null }: AmountInputProps) {
+  const labelId = `${id}-label`, unitId = `${id}-unit`;
   return (
     <div className="amount-input">
-      <label className="control-label" htmlFor={id}>{label}</label>
+      <label className="control-label" id={labelId} htmlFor={id}>{label}</label>
       <div className={`input-with-suffix ${max ? 'input-with-suffix--max' : ''}`}>
         <input id={id} type="text" inputMode="decimal" autoComplete="off" spellCheck={false} value={value} placeholder={placeholder} disabled={disabled}
-          aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} />
+          aria-labelledby={`${labelId} ${unitId}`} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} />
         {/* Hiasan kanan (tombol max + satuan) satu baris rata kanan; padding-right input mengikuti modifier --max agar placeholder tidak tertutup. */}
         <div className="input-adorn">
           {max ? <button type="button" className="input-max" onClick={max.onClick} disabled={max.disabled} title={max.title} aria-label={`${max.title ?? 'Use the maximum'}`}>max</button> : null}
-          <span aria-hidden="true">{suffix}</span>
+          <span id={unitId}>{suffix}</span>
         </div>
       </div>
     </div>

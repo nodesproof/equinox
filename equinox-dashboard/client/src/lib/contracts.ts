@@ -103,15 +103,17 @@ export function engineRows(vol: VolState | null): ParamRow[] {
 
 // ---------------------------------------------------------------- dokumentasi & kejujuran
 
-export interface DocLink { label: string; path: string; detail: string }
-/** Tautan docs (GitHub `main`) — README, BENCHMARK, DEMO_LOG, PRD, OPS, VERIFICATION. */
+/** Ikon tautan docs (kunci, bukan komponen — helper ini bebas React; `DocsPanel` memetakannya ke lucide). */
+export type DocIcon = 'book' | 'code' | 'scroll' | 'shield';
+export interface DocLink { label: string; path: string; detail: string; icon: DocIcon }
+/** Tautan docs (GitHub `main`) — README, BENCHMARK, DEMO_LOG, PRD, OPS, VERIFICATION; ikon per tautan (bukan per indeks). */
 export const DOCS: DocLink[] = [
-  { label: 'README', path: 'README.md', detail: 'what Equinox is, how to run it, the three pools' },
-  { label: 'Benchmark', path: 'docs/BENCHMARK.md', detail: 'Stylus vs Solidity gas, program cached' },
-  { label: 'Demo log', path: 'docs/DEMO_LOG.md', detail: 'every demo transaction with its hash' },
-  { label: 'PRD / architecture', path: 'prd-arsitektur.md', detail: 'requirements and architecture (Indonesian)' },
-  { label: 'Ops on Sepolia', path: 'docs/OPS_SEPOLIA.md', detail: 'keeper, boards, settlement runbook' },
-  { label: 'Verification', path: 'docs/VERIFICATION.md', detail: 'source verification and parity checks' },
+  { label: 'README', path: 'README.md', detail: 'what Equinox is, how to run it, the three pools', icon: 'book' },
+  { label: 'Benchmark', path: 'docs/BENCHMARK.md', detail: 'Stylus vs Solidity gas, program cached', icon: 'code' },
+  { label: 'Demo log', path: 'docs/DEMO_LOG.md', detail: 'every demo transaction with its hash', icon: 'scroll' },
+  { label: 'PRD / architecture', path: 'prd-arsitektur.md', detail: 'requirements and architecture (Indonesian)', icon: 'book' },
+  { label: 'Ops on Sepolia', path: 'docs/OPS_SEPOLIA.md', detail: 'keeper, boards, settlement runbook', icon: 'scroll' },
+  { label: 'Verification', path: 'docs/VERIFICATION.md', detail: 'source verification and parity checks', icon: 'shield' },
 ];
 export const docUrl = (d: DocLink) => `${REPO}/blob/main/${d.path}`;
 

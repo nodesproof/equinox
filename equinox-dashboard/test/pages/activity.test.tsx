@@ -4,17 +4,17 @@
 import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Address } from 'viem';
-import { POOL_KEYS, explorerAddress, explorerTx } from '@chain/deployment';
+import { DEPLOYED_AT, DEPLOYED_AT_BLOCK, POOL_KEYS, explorerAddress, explorerTx } from '@chain/deployment';
 import type { TradeEvent } from '@chain/chain/events';
 import { shortAddr, shortHash, utc, wad } from '@chain/ui/format';
 import Activity from '@/pages/Activity';
 import Overview from '@/pages/Overview';
 import { EVENTS_EVERY } from '@/chain/provider';
 import { MAX_ROWS } from '@/components/EventsTable';
-import { DEFAULT_EVENT_FILTER, NITRO_BLOCK_S, TIME_APPROX_NOTE, blockTimeApprox, countNote, filterTrades, isDefaultFilter, isMine, scanNote, settledMarkers } from '@/lib/activity';
-import { renderWithChain } from '../render';
-import { BLOCK, BLOCK_TIME, OWNER, USER, liveSnapshot, withUser } from '../fixtures/snapshot';
-import { claimedEvent, liveEvents, liveObserved, liveTrades, settledEvent } from '../fixtures/events';
+import { DEFAULT_EVENT_FILTER, NITRO_BLOCK_S, TIME_APPROX_NOTE, blockTimeApprox, countNote, filterTrades, isDefaultFilter, isMine, scanNote, secondsPerBlock, seedNote, settledMarkers } from '@/lib/activity';
+import { Providers, renderWithChain } from '../render';
+import { BLOCK, BLOCK_TIME, OWNER, USER, chainState, liveSnapshot, withUser } from '../fixtures/snapshot';
+import { claimedEvent, liveEvents, liveObserved, liveSeed, liveTrades, settledEvent } from '../fixtures/events';
 
 afterEach(() => { cleanup(); window.location.hash = ''; });
 
@@ -128,6 +128,12 @@ describe('Activity — event feed', () => {
     expect(screen.getByText('0 of 0 events')).toBeInTheDocument();
     expect(rows()).toHaveLength(0);
     unmount();
+    // Seed loaded (metadata from the provider): the note carries the seed's generation date and last block.
+    const seed = liveSeed();
+    const r1 = renderWithChain(<Activity />, { snapshot: s, nowMs: s.fetchedAtMs, events: liveEvents(), eventsState: 'seed', seed: { generatedAt: seed.generatedAt, lastBlock: seed.lastBlock } });
+    expect(screen.getByText(new RegExp(`build-time seed loaded \\(generated 2026-09-20 13:03 UTC · to block ${seed.lastBlock}\\) · chain scan pending`))).toBeInTheDocument();
+    expect(scanNote('seed', 8, { generatedAt: seed.generatedAt, lastBlock: seed.lastBlock })).toContain(seedNote({ generatedAt: seed.generatedAt, lastBlock: seed.lastBlock }));
+    r1.unmount();
     const r2 = renderWithChain(<Activity />, { snapshot: s, nowMs: s.fetchedAtMs, events: { trades: [], observed: [] }, eventsState: 'scanning' });
     expect(screen.getByText('Scanning the chain for events…')).toBeInTheDocument();
     expect(screen.getAllByText('Scanning…').length).toBeGreaterThanOrEqual(1);
@@ -138,7 +144,7 @@ describe('Activity — event feed', () => {
     expect(screen.getByText(/chain scan failed — retrying at the next refresh$/)).toBeInTheDocument();
   });
 
-  it('shows MAX_ROWS rows first, "Show more" reveals the rest, and a filter change resets the page', () => {
+  it('shows MAX_ROWS rows first, "Show more" reveals the rest, a poll with identical content keeps the expanded page, and a filter change resets it', () => {
     const base = liveTrades();
     const many: TradeEvent[] = [];
     for (let i = 0; i < MAX_ROWS + 5; i++) {
@@ -146,14 +152,31 @@ describe('Activity — event feed', () => {
       many.push({ ...t, block: BLOCK - BigInt(i) * 3n, logIndex: i, tx: `0x${(i + 1).toString(16).padStart(64, 'b')}` as `0x${string}` });
     }
     const s = liveSnapshot();
-    renderWithChain(<Activity />, { snapshot: s, nowMs: s.fetchedAtMs, events: { trades: many, observed: liveObserved() }, eventsState: 'live' });
+    const state = chainState({ snapshot: s, nowMs: s.fetchedAtMs, events: { trades: many, observed: liveObserved() }, eventsState: 'live' });
+    const { rerender } = renderWithChain(<Activity />, state);
     expect(rows()).toHaveLength(MAX_ROWS);
     const more = screen.getByRole('button', { name: `Show 5 more (5 hidden)` });
     fireEvent.click(more);
     expect(rows()).toHaveLength(many.length);
     expect(screen.queryByRole('button', { name: /Show .* more/ })).toBeNull();
+    // A poll re-reads the feed: mergeEvents allocates new arrays with the same content → the expanded page must survive (Task 6 review, Medium).
+    const polled = chainState({ ...state, snapshot: { ...s, blockNumber: BLOCK + 4n }, events: { trades: many.map((t) => ({ ...t })), observed: liveObserved() }, eventsState: 'live' });
+    rerender(<Providers state={polled}><Activity /></Providers>);
+    expect(rows()).toHaveLength(many.length);
+    expect(screen.queryByRole('button', { name: /Show .* more/ })).toBeNull();
+    // A poll that appends a newer event keeps the page too (the new row is visible on top; nothing hidden by the limit).
+    const newest: TradeEvent = { ...base[0]!, block: BLOCK + 1n, logIndex: 99, tx: `0x${'c'.repeat(64)}` as `0x${string}` };
+    rerender(<Providers state={chainState({ ...polled, events: { trades: [newest, ...many], observed: liveObserved() } })}><Activity /></Providers>);
+    expect(rows()).toHaveLength(many.length + 1);
+    // Filter change → back to the first page.
     fireEvent.click(chip('Bought'));
     fireEvent.click(chip('All kinds'));
+    expect(rows()).toHaveLength(MAX_ROWS);
+    // Show more again, then "Clear filters" from a filtered no-match state resets as well.
+    fireEvent.click(screen.getByRole('button', { name: /Show .* more/ }));
+    expect(rows()).toHaveLength(many.length + 1);
+    fireEvent.click(chip('Settled'));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(rows()).toHaveLength(MAX_ROWS);
   });
 
@@ -242,13 +265,26 @@ describe('Activity — σ_base timeline', () => {
 });
 
 describe('Activity — pure helpers', () => {
-  it('blockTimeApprox: 0.25 s per block behind the snapshot block, labelled as an approximation', () => {
-    expect(NITRO_BLOCK_S).toBe(0.25);
+  it('blockTimeApprox: linear interpolation between the deploy anchor (manifest) and the snapshot anchor; 0.25 s/block only as the fallback', () => {
+    // Both anchors are exact; in between the rate is the real one of the range, not a fixed 0.25 s (≈ 18 min off at the deploy block otherwise).
+    const rate = (BLOCK_TIME - DEPLOYED_AT) / Number(BLOCK - DEPLOYED_AT_BLOCK);
+    expect(BLOCK).toBeGreaterThan(DEPLOYED_AT_BLOCK);
+    expect(rate).toBeGreaterThan(0.2); expect(rate).toBeLessThan(0.3);
+    expect(secondsPerBlock(BLOCK, BLOCK_TIME)).toBeCloseTo(rate, 12);
     expect(blockTimeApprox(BLOCK, BLOCK, BLOCK_TIME)).toBe(BLOCK_TIME);
-    expect(blockTimeApprox(BLOCK - 4n, BLOCK, BLOCK_TIME)).toBe(BLOCK_TIME - 1);
-    expect(blockTimeApprox(BLOCK - 4000n, BLOCK, BLOCK_TIME)).toBe(BLOCK_TIME - 1000);
-    expect(blockTimeApprox(BLOCK + 8n, BLOCK, BLOCK_TIME)).toBe(BLOCK_TIME + 2);
+    expect(blockTimeApprox(DEPLOYED_AT_BLOCK, BLOCK, BLOCK_TIME)).toBeCloseTo(DEPLOYED_AT, 6);
+    const mid = DEPLOYED_AT_BLOCK + (BLOCK - DEPLOYED_AT_BLOCK) / 2n;
+    expect(blockTimeApprox(mid, BLOCK, BLOCK_TIME)).toBeCloseTo(BLOCK_TIME - Number(BLOCK - mid) * rate, 6);
+    expect(blockTimeApprox(BLOCK - 4000n, BLOCK, BLOCK_TIME)).toBeCloseTo(BLOCK_TIME - 4000 * rate, 6);
+    expect(blockTimeApprox(BLOCK + 8n, BLOCK, BLOCK_TIME)).toBeCloseTo(BLOCK_TIME + 8 * rate, 6);
+    // Degenerate anchors (snapshot at/before the deploy block, or a non-positive span) fall back to the nominal Nitro rate.
+    expect(NITRO_BLOCK_S).toBe(0.25);
+    expect(secondsPerBlock(DEPLOYED_AT_BLOCK, BLOCK_TIME)).toBe(NITRO_BLOCK_S);
+    expect(secondsPerBlock(BLOCK, DEPLOYED_AT)).toBe(NITRO_BLOCK_S);
+    expect(blockTimeApprox(DEPLOYED_AT_BLOCK - 4n, DEPLOYED_AT_BLOCK, DEPLOYED_AT)).toBe(DEPLOYED_AT - 1);
     expect(TIME_APPROX_NOTE.startsWith('≈ time =')).toBe(true);
+    expect(TIME_APPROX_NOTE).toContain(`block ${DEPLOYED_AT_BLOCK}`);
+    expect(TIME_APPROX_NOTE).toContain('approximation');
   });
 
   it('filterTrades / settledMarkers / scanNote / countNote', () => {

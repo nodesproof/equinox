@@ -7,8 +7,9 @@ import { ALL_SERIES, BOARDS, POOLS, POOL_KEYS, explorerAddress, explorerTx } fro
 import { fmtCountdown, pct, usdg, usdg6, wad } from '@chain/ui/format';
 import Overview, { nextBoard } from '@/pages/Overview';
 import { atmWindow, quoteCell } from '@/components/BoardSummary';
+import { PREVIEW_ROWS } from '@/components/EventsPreview';
 import { paritySummary } from '@/components/ParityPanel';
-import { boardViews, seriesViews } from '@/chain/selectors';
+import { boardViews, derivePool, seriesViews } from '@/chain/selectors';
 import { refLabel } from '@/lib/format';
 import { renderWithChain } from '../render';
 import { BLOCK_TIME, VOL, liveParity, liveSnapshot, withBlackout, withExpired, withOracleStale, withPaused, withSettled, withStale } from '../fixtures/snapshot';
@@ -52,6 +53,7 @@ describe('Overview — live snapshot', () => {
       expect(nav.nextElementSibling).toHaveTextContent(`${usdg(p.totalAssets)} ${POOLS[k].assetSymbol}`);
       expect(within(c).getByText('Free liquidity').nextElementSibling).toHaveTextContent(`${usdg(p.freeLiquidity)} ${POOLS[k].assetSymbol}`);
       expect(within(c).getByRole('meter')).toHaveAttribute('aria-valuemax', '100');
+      expect(within(c).getByRole('meter')).toHaveAttribute('aria-valuenow', String(Math.round(Number(derivePool(p).util) / 1e14) / 100));
       expect(within(c).getByText(new RegExp(`Vega cap .*\\(${p.cfg.vegaCapBps / 100} % of capital ref\\)`))).toBeInTheDocument();
       expect(within(c).getByText(new RegExp(`\\(${p.cfg.maxUtilBps / 100} %\\)`))).toBeInTheDocument();
       expect(within(c).getByRole('link', { name: `Open Pool ${k} on Arbiscan` })).toHaveAttribute('href', explorerAddress(POOLS[k].pool));
@@ -163,19 +165,20 @@ describe('Overview — live snapshot', () => {
 });
 
 describe('Overview — events and σ_base chart', () => {
-  it('previews the 5 newest pool events with explorer links and draws the Observed series', () => {
+  it('previews the PREVIEW_ROWS newest pool events with explorer links and draws the Observed series', () => {
     const events = liveEvents();
     const { container } = renderWithChain(<Overview />, { snapshot: liveSnapshot(), events, eventsState: 'live' });
     const list = screen.getByRole('list', { name: 'Latest pool events' });
     const rows = within(list).getAllByRole('listitem');
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(PREVIEW_ROWS);
+    expect(events.trades.length).toBeGreaterThan(PREVIEW_ROWS);
     const newest = liveTrades()[0]!;
     expect(within(rows[0]!).getByText(newest.kind)).toBeInTheDocument();
     expect(within(rows[0]!).getByText(newest.label)).toBeInTheDocument();
     expect(within(rows[0]!).getByText(newest.amount)).toBeInTheDocument();
     expect(within(rows[0]!).getByLabelText(`Pool ${newest.pool}`)).toBeInTheDocument();
     expect(within(rows[0]!).getByTitle(newest.tx)).toHaveAttribute('href', explorerTx(newest.tx));
-    expect(screen.getByText(`Latest 5 of ${events.trades.length} events since deploy · newest first`)).toBeInTheDocument();
+    expect(screen.getByText(`Latest ${PREVIEW_ROWS} of ${events.trades.length} events since deploy · newest first`)).toBeInTheDocument();
     expect(screen.getByText('Live')).toHaveClass('status-pill--good');
     // Chart: one line path, last point, footer with the newest observation; y labels = max/min σ.
     const obs = liveObserved();
@@ -218,6 +221,9 @@ describe('Overview — loading, first-load failure and stale', () => {
     expect(poolCards(container)).toHaveLength(POOL_KEYS.length);
     for (const strong of Array.from(container.querySelectorAll('.pool-card__nav strong'))) expect(strong.textContent).not.toMatch(/\d/);
     expect(screen.getByText('Parity — awaiting snapshot')).toBeInTheDocument();
+    // No meter role without a value (a meter needs aria-valuenow; 0 would be a fabricated number) — the track is decorative until the first snapshot.
+    expect(screen.queryAllByRole('meter')).toHaveLength(0);
+    expect(container.querySelectorAll('.meter-track[aria-hidden="true"]')).toHaveLength(POOL_KEYS.length);
     expect(screen.queryByText('2,579.49')).toBeNull();
     expect(screen.queryByText(/RPC error/)).toBeNull();
   });

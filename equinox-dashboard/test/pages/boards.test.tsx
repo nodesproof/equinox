@@ -15,7 +15,7 @@ import { DEFAULT_TRADE_POOL, K0, boardNote, buyCell, closeCell, deltaCell, filte
 import { boardsHref, tradeHref } from '@/lib/route';
 import { expiryLabel, wadExact } from '@/lib/format';
 import { renderWithChain } from '../render';
-import { BLOCK, liveParity, liveSnapshot, withBlackout, withExpired, withOracleStale, withSettled, withStale } from '../fixtures/snapshot';
+import { BLOCK, liveParity, liveSnapshot, withBlackout, withBuyErrors, withExpired, withOracleStale, withSettled, withStale } from '../fixtures/snapshot';
 
 afterEach(() => { cleanup(); window.location.hash = ''; });
 
@@ -110,6 +110,37 @@ describe('Boards — live snapshot', () => {
     expect(tr.querySelector('[data-delta]')).toHaveAttribute('data-delta', 'none');
     expect(cells(tr).map((td) => td.textContent)).toContain('—');
     for (const td of cells(tr).slice(1, -1)) expect(td.textContent).not.toBe('');
+  });
+
+  it('pools that revert for DIFFERENT reasons keep one Buy cell each (no merged colspan): sharedStatus is null, every pool shows its own text', () => {
+    const errors = ['OracleStale', 'MathUnavailable', 'SeriesExpired'];
+    const s = withBuyErrors(liveSnapshot(), 0, errors);
+    const { container } = renderWithChain(<Boards />, { snapshot: s });
+    const r = views(s)[0]!;
+    expect(sharedStatus(r)).toBeNull();
+    const perPool = POOL_KEYS.map((k) => buyCell(r, k));
+    expect(perPool.every((c) => c.kind === 'status')).toBe(true);
+    expect(new Set(perPool.map((c) => c.text)).size).toBe(Math.min(POOL_KEYS.length, errors.length));
+    const tr = row(container, r.i);
+    expect(tr.querySelector('td[colspan]')).toBeNull();
+    // Exactly one Buy cell per pool (POOL_KEYS order), each carrying its own human text and the raw revert name as title; never blank.
+    const statusCells = Array.from(tr.querySelectorAll<HTMLElement>('td.quote-status'));
+    expect(statusCells).toHaveLength(POOL_KEYS.length);
+    POOL_KEYS.forEach((k, i) => {
+      const cell = statusCells[i]!;
+      expect(cell).toHaveTextContent(perPool[i]!.text);
+      expect(cell).toHaveAttribute('title', perPool[i]!.name!);
+      expect(perPool[i]!.text).toBe(REVERT_TEXT[errors[Math.min(i, errors.length - 1)]!] ?? errors[Math.min(i, errors.length - 1)]);
+      expect(cell.textContent).not.toBe('');
+      expect(within(tr).getAllByRole('cell')[1 + POOL_KEYS.indexOf(k)]).toBe(cell);   // kolom Buy k pada posisinya
+    });
+    // A quote-less row still fills Δ, close, parity, σ_buy with '—' (never blank).
+    expect(tr.querySelector('[data-delta]')).toHaveAttribute('data-delta', 'none');
+    for (const td of cells(tr).slice(1, -1)) expect(td.textContent).not.toBe('');
+    // Two pools with the same reason and one different → still not merged; all identical → merged again.
+    const twoSame = withBuyErrors(liveSnapshot(), 0, ['OracleStale', 'OracleStale', 'SeriesExpired']);
+    expect(POOL_KEYS.length > 2 ? sharedStatus(views(twoSame)[0]!) : null).toBeNull();
+    expect(sharedStatus(views(withBuyErrors(liveSnapshot(), 0, ['OracleStale']))[0]!)?.name).toBe('OracleStale');
   });
 
   it('oracle stale: every unsettled series shows REVERT_TEXT.OracleStale in place of the quotes', () => {
@@ -354,6 +385,25 @@ describe('Boards — empty states and footnote', () => {
     renderWithChain(<Boards />, { snapshot: null, meta: { error: 'HTTP request failed.' } });
     expect(screen.getAllByText('RPC error — retrying').length).toBeGreaterThanOrEqual(BOARDS.length + 1);
     expect(screen.queryByText('Awaiting snapshot')).toBeNull();
+  });
+
+  it('the skeleton follows the active filter: a cold `?board=` deep link shows one panel before the snapshot, chips narrow the skeleton too', () => {
+    const target = BOARDS[BOARDS.length - 1]!;
+    window.location.hash = boardsHref(target.id);
+    const { container } = renderWithChain(<Boards />, { snapshot: null });
+    expect(container.querySelectorAll('article.board-panel')).toHaveLength(1);
+    expect(panel(container, target.id)).toBeInTheDocument();
+    expect(panel(container, target.id)).toHaveAttribute('data-status', 'loading');
+    const inBoard = ALL_SERIES.filter((s) => s.boardId === target.id);
+    expect(within(panel(container, target.id)).getByText(`${inBoard.length} series`)).toBeInTheDocument();
+    expect(screen.getByText(`— of ${inBoard.length} series`)).toBeInTheDocument();
+    // Calls only → the skeleton's series count follows the type filter (manifest count, no snapshot needed).
+    fireEvent.click(screen.getByRole('button', { name: 'Calls' }));
+    expect(within(panel(container, target.id)).getByText(`${inBoard.filter((s) => s.isCall).length} series`)).toBeInTheDocument();
+    // Back to all boards → one skeleton per manifest board, same as the live layout.
+    fireEvent.click(screen.getByRole('button', { name: 'All boards' }));
+    expect(container.querySelectorAll('article.board-panel')).toHaveLength(BOARDS.length);
+    expect(dataRows(container)).toHaveLength(0);
   });
 
   it('quotes the classic board footnote (inventory vs math, K5 wording, Pool C sentence when Pool C exists) and the gas line', () => {

@@ -1,6 +1,7 @@
 // Portfolio.tsx — halaman Portfolio HIDUP untuk akun terhubung: saldo aset per pool (mock A/B, Paxos C), share LP × NAV/share = nilai, allowance
-// per pool, posisi per seri dengan nilai close saat ini (`quoteClose(id, posisi)` dibaca ON-DEMAND dalam efek berkunci snapshot + posisi, penjaga
-// urutan — bukan bagian snapshot) dan payout klaim, riwayat sendiri (`events.trades` dengan `who === account`), tautan Arbiscan.
+// per pool, posisi per seri dengan nilai close saat ini (`quoteClose(id, posisi)` dibaca ON-DEMAND dalam efek berkunci snapshot + posisi, DIPAKU ke
+// blok snapshot (`blockNumber`) agar sesuai catatan kaki, penjaga urutan — bukan bagian snapshot) dan payout klaim, riwayat sendiri (`events.trades`
+// dengan `who === account`), tautan Arbiscan.
 // Tanpa akun → CTA connect tanpa satu angka pun; akun ada tetapi snapshot belum dibaca dengannya → kartu tanpa angka + alasan.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Address } from 'viem';
@@ -23,16 +24,18 @@ import { accent, assetTagline } from '@/components/PoolCard';
 import { feedPill } from '@/components/EventsPreview';
 import { Scroller } from '@/components/Scroller';
 import { EmptyValue, SectionHeading, StatusPill } from '@/components/primitives';
-import { STATUS_TONE, statusText } from '@/lib/boards';
+import { DEFAULT_TRADE_POOL, STATUS_TONE, statusText } from '@/lib/boards';
 import { tradeHref } from '@/lib/route';
 import { ALLOWANCE_MIN_TEXT, lpValue, positionKey } from '@/lib/trade';
 
 /** Nilai close on-demand satu posisi: `value` = proceeds `quoteClose(id, units)` (6 dp, indikatif), `error` = revert terdekode (mis. SeriesExpired). */
 export interface CloseValue { value: bigint | null; error: string | null; loading: boolean }
 
-/** Membaca `quoteClose(id, posisi)` untuk setiap posisi yang belum settle, sekali per (client, user) — user berganti setiap snapshot/akun.
- *  Penjaga urutan: balasan dari efek yang lebih lama (snapshot sebelumnya / akun lain / unmount) dibuang. Nilai lama dipertahankan selama membaca ulang. */
-export function useCloseValues(client: Client, user: UserView | null): Record<string, CloseValue> {
+/** Membaca `quoteClose(id, posisi)` untuk setiap posisi yang belum settle, sekali per (client, user, blockNumber) — user berganti setiap snapshot/akun.
+ *  Dipaku ke `blockNumber` snapshot (eth_call `blockNumber`) sehingga nilai close = kuotasi pada blok yang sama dengan posisi/saldo yang ditampilkan
+ *  (catatan kaki "read on demand at the snapshot block"); null (tanpa snapshot) → blok terbaru. Penjaga urutan: balasan dari efek yang lebih lama
+ *  (snapshot sebelumnya / akun lain / unmount) dibuang. Nilai lama dipertahankan selama membaca ulang. */
+export function useCloseValues(client: Client, user: UserView | null, blockNumber: bigint | null): Record<string, CloseValue> {
   const [values, setValues] = useState<Record<string, CloseValue>>({});
   const seq = useRef(0);
   useEffect(() => {
@@ -41,13 +44,13 @@ export function useCloseValues(client: Client, user: UserView | null): Record<st
     setValues((prev) => Object.fromEntries(open.map((p) => { const key = positionKey(p); return [key, { value: prev[key]?.value ?? null, error: null, loading: true }]; })));
     for (const p of open) {
       const key = positionKey(p);
-      client.readContract({ ...poolCall(p.k), functionName: 'quoteClose', args: [p.ref.id[p.k], p.units] }).then(
+      client.readContract({ ...poolCall(p.k), functionName: 'quoteClose', args: [p.ref.id[p.k], p.units], ...(blockNumber === null ? {} : { blockNumber }) }).then(
         ([proceeds]) => { if (n === seq.current) setValues((v) => ({ ...v, [key]: { value: proceeds, error: null, loading: false } })); },
         (e: unknown) => { if (n === seq.current) setValues((v) => ({ ...v, [key]: { value: null, error: decodeRevert(e), loading: false } })); },
       );
     }
     return () => { seq.current++; };
-  }, [client, user]);
+  }, [client, user, blockNumber]);
   return values;
 }
 
@@ -78,7 +81,7 @@ function AccountCard({ account, blockNumber, emptyLabel }: { account: Address; b
       <div className="account-address"><span>Address</span><span className="mono account-address__full">{account}</span></div>
       <div className="account-links">
         <a href={explorerAddress(account)} target="_blank" rel="noopener noreferrer" title={`${account} on Arbiscan`}>Arbiscan <ExternalLink size={11} /></a>
-        <a href={tradeHref(POOL_KEYS.find((k) => k === 'B') ?? POOL_KEYS[0]!)}>Trade <ArrowUpRight size={11} /></a>
+        <a href={tradeHref(DEFAULT_TRADE_POOL)}>Trade <ArrowUpRight size={11} /></a>
       </div>
       <p className="account-card__meta">{NETWORK_NAME} · {CHAIN_ID} · {blockNumber !== null ? `balances at block ${blockNumber}` : emptyLabel.toLowerCase()}</p>
     </article>
@@ -210,7 +213,7 @@ export default function Portfolio() {
   const user = useUser();
   const pools = usePools();
   const { trades, eventsState } = useEvents();
-  const closeValues = useCloseValues(client, user);
+  const closeValues = useCloseValues(client, user, snapshot?.blockNumber ?? null);
   const mine = useMemo(() => ownTrades(trades, account), [trades, account]);
   const emptyLabel = failed ? 'RPC error — retrying' : account && snapshot && !user ? (wrongChain ? `Wrong network — switch to ${NETWORK_NAME}` : 'Reading your balances') : 'Awaiting snapshot';
   const poolOf = (k: PoolKey) => pools.find((p) => p.k === k) ?? null;

@@ -16,7 +16,7 @@ import { seriesViews, userView } from '@/chain/selectors';
 import type { BuildCall, ChainState, TxEntry } from '@/chain/types';
 import { NETWORK_NAME } from '@/components/Layout';
 import { tradeHref } from '@/lib/route';
-import { ALLOWANCE_MIN_TEXT, ETH_FAUCET, FAUCET_LABEL, PAXOS_FAUCET_LABEL, buyPreviewText, claimPreviewText, closePreviewText, depositPreviewText, openSeriesOptions, redeemPreviewText } from '@/lib/trade';
+import { ALLOWANCE_MIN_TEXT, ETH_FAUCET, FAUCET_LABEL, PAXOS_FAUCET_LABEL, buyPreviewText, claimPreviewText, closePreviewText, depositPreviewText, openSeriesOptions, pickOption, redeemPreviewText } from '@/lib/trade';
 import { Providers, renderWithChain } from '../render';
 import { USER, chainState, liveParity, liveSnapshot, withSettled, withUser, type StateOverrides } from '../fixtures/snapshot';
 
@@ -69,7 +69,12 @@ describe('Trade — wallet states', () => {
     expect(el<HTMLSelectElement>('close-series')).toBeDisabled();
     expect(within(el('close-series')).getByRole('option')).toHaveTextContent('connect wallet to see positions');
     expect(screen.getByLabelText('Your wallet on pool B')).toHaveTextContent(/No injected wallet/);
-    // Indicative quote after the debounce; no executedBuy without an account.
+    // Nothing is picked silently: the select shows its placeholder, the preview stays idle, the Buy click gets the guard (no fallback to option 0).
+    expect(el<HTMLSelectElement>('buy-series').value).toBe('');
+    expect(el<HTMLSelectElement>('buy-series').options[0]).toHaveTextContent('pick a series');
+    expect(el('buy-preview')).toHaveAttribute('data-state', 'idle');
+    // Indicative quote after the debounce once a series is picked; no executedBuy without an account.
+    setValue('buy-series', String(C2600_1));
     expect(el('buy-preview')).toHaveTextContent('…');
     await advance(DEBOUNCE_MS);
     expect(el('buy-preview')).toHaveTextContent(buyPreviewText({ premium: Q.premiumAssets, fee: Q.feeAssets, sigma: Q.sigma, delta: Q.delta, vega: Q.vegaTotal, exec: null, feeExec: null, maxPremium: null }, POOLS.B.assetSymbol));
@@ -103,8 +108,12 @@ describe('Trade — wallet states', () => {
     const held = userView(s, USER)!.positions.filter((p) => p.k === 'B');
     expect(within(panel).getByText(held.map((p) => `${wad(p.units, 2)} ${seriesLabel(p.ref)}`).join(', '))).toBeInTheDocument();
     for (const name of [/^Deposit$/, /^Redeem$/, /^Buy$/, /^Close$/, /^Claim$/]) expect(button(name)).toBeEnabled();
+    // Amount inputs: the accessible name carries the unit (label + suffix), the max button its own label.
+    expect(screen.getByRole('textbox', { name: `Amount (${assetLabel('B')}) ${POOLS.B.assetSymbol}` })).toBe(el('deposit-assets'));
+    expect(screen.getByRole('textbox', { name: 'Shares shares' })).toBe(el('redeem-shares'));
+    expect(screen.getAllByRole('textbox', { name: 'Size units' }).map((i) => i.id)).toEqual(['buy-size', 'close-size']);
     // Open-series select = status `open` on the pool (not settled, expiry > blockTime + 60 — the classic openRows()).
-    const opts = Array.from(el<HTMLSelectElement>('buy-series').options).map((o) => o.textContent);
+    const opts = Array.from(el<HTMLSelectElement>('buy-series').options).filter((o) => o.value !== '').map((o) => o.textContent);
     expect(opts).toEqual(openSeriesOptions(seriesViews(s, liveParity(s)), 'B').map((o) => o.text));
     expect(opts).toHaveLength(seriesViews(s, liveParity(s)).filter((r) => r.status.B === 'open').length);
   });
@@ -149,7 +158,8 @@ describe('Trade — asset per pool', () => {
     expect(await lastRun(state).build('A', USER)).toEqual(redeemCall('A', settled.user!.shares.A, USER));
     // Claim: settled position with a payout (C 2800 #0 → 100/unit × 5 units) — the select lists settled positions only.
     const claimSel = el<HTMLSelectElement>('claim-series');
-    expect(Array.from(claimSel.options).map((o) => o.value)).toEqual(userView(settled, USER)!.positions.filter((p) => p.k === 'A' && p.settled).map((p) => String(p.i)));
+    expect(Array.from(claimSel.options).filter((o) => o.value !== '').map((o) => o.value)).toEqual(userView(settled, USER)!.positions.filter((p) => p.k === 'A' && p.settled).map((p) => String(p.i)));
+    expect(claimSel.value).toBe('');                                                     // no silent pick
     setValue('claim-series', String(C2800));
     const claim = userView(settled, USER)!.positions.find((p) => p.k === 'A' && p.i === C2800)!;
     expect(el('claim-preview')).toHaveTextContent(claimPreviewText({ units: claim.units, payoutPerUnit: claim.payoutPerUnit, payout: claim.claimable }, 'USDG'));
@@ -204,9 +214,12 @@ describe('Trade — buy and close hand run() builders whose caps come from the e
     expect((call.args as bigint[])[2]).toBe(983_597n);
   });
 
-  it('guards run before any RPC and show inline: size < MIN_SIZE, size above the position, empty amounts', async () => {
+  it('guards run before any RPC and show inline: no series picked, size < MIN_SIZE, size above the position, empty amounts', async () => {
     const { state } = renderWithChain(<Trade />, connected());
     setValue('buy-size', '0.001');
+    fireEvent.click(button(/^Buy$/));
+    expect(screen.getByText('pick a series and a size')).toHaveAttribute('role', 'status');   // nothing picked by default
+    setValue('buy-series', String(C2600_1));
     fireEvent.click(button(/^Buy$/));
     expect(screen.getByText(REVERT_TEXT.SizeTooSmall!)).toHaveAttribute('role', 'status');
     setValue('close-series', String(C2800));
@@ -252,6 +265,7 @@ describe('Trade — previews (classic sentences) and their refresh', () => {
     vi.mocked(executedBuy).mockRejectedValue(new Error('no allowance'));
     const state = chainState(connected());
     const { rerender } = renderWithChain(<Trade />, state);
+    setValue('buy-series', String(C2600_1));
     await advance(DEBOUNCE_MS);
     expect(el('buy-preview')).toHaveTextContent('(indicative)');
     expect(el('buy-preview')).not.toHaveTextContent('executed');
@@ -284,6 +298,15 @@ describe('Trade — prefill and log', () => {
     act(() => { window.location.hash = '#/trade?pool=Z&series=999999'; window.dispatchEvent(new Event('hashchange')); });
     expect(poolRadio('B')).toHaveAttribute('aria-checked', 'true');
     expect(el<HTMLSelectElement>('buy-series').value).toBe(String(P2400));
+    // A valid series that is not in a given list (C 2600 #1 is open but not held) → that select stays on its placeholder instead of silently picking option 0.
+    act(() => { window.location.hash = tradeHref('B', C2600_1); window.dispatchEvent(new Event('hashchange')); });
+    expect(el<HTMLSelectElement>('buy-series').value).toBe(String(C2600_1));
+    expect(el<HTMLSelectElement>('close-series').value).toBe('');
+    expect(el<HTMLSelectElement>('close-series').options[0]).toHaveTextContent('pick a position');
+    expect(el<HTMLSelectElement>('close-series')).toBeEnabled();
+    expect(pickOption([{ i: 1, text: 'x' }, { i: 2, text: 'y' }], 3)).toBeNull();
+    expect(pickOption([{ i: 1, text: 'x' }], null)).toBeNull();
+    expect(pickOption([{ i: 1, text: 'x' }], 1)).toBe(1);
     // Keyboard: arrow keys move the pool radio.
     fireEvent.keyDown(poolRadio('B'), { key: 'ArrowRight' });
     expect(poolRadio(POOL_KEYS[(POOL_KEYS.indexOf('B') + 1) % POOL_KEYS.length]!)).toHaveAttribute('aria-checked', 'true');
@@ -317,9 +340,12 @@ describe('Trade — prefill and log', () => {
     expect(screen.getByText('4 entries · 2 failed')).toBeInTheDocument();
   });
 
-  it('empty log and skeleton: "No transactions yet."; without a snapshot the selects carry the reason and no number is shown', () => {
+  it('empty log and skeleton: "No transactions yet." beside an always-present aria-live list; without a snapshot the selects carry the reason and no number is shown', () => {
     renderWithChain(<Trade />, { snapshot: null, hasWallet: true, client });
     expect(screen.getByText('No transactions yet.')).toBeInTheDocument();
+    const live = screen.getByRole('list', { name: 'Transaction log entries' });
+    expect(live).toHaveAttribute('aria-live', 'polite');
+    expect(live).toBeEmptyDOMElement();
     expect(within(el('buy-series')).getByRole('option')).toHaveTextContent('Awaiting snapshot');
     expect(screen.getAllByText('Awaiting snapshot').length).toBeGreaterThanOrEqual(1);
     expect(el('buy-preview')).toHaveAttribute('data-state', 'idle');

@@ -35,8 +35,10 @@ export const openSeriesOptions = (rows: SeriesView[], k: PoolKey): SelectOption[
 /** Posisi yang dipegang di pool k (`heldRows(settled)` klasik): `C 2800 #0 (25 Sep) — 5.00 units`. */
 export const heldOptions = (positions: PositionView[], k: PoolKey, settled: boolean): SelectOption[] =>
   positions.filter((p) => p.k === k && p.settled === settled).map((p) => ({ i: p.i, text: `${seriesLabel(p.ref)} — ${wad(p.units, 2)} units` }));
-/** Pilihan efektif (`fill()` klasik): yang diminta bila masih ada di daftar, selain itu opsi pertama; null bila daftar kosong. */
-export const pickOption = (options: SelectOption[], wanted: number | null): number | null => (options.some((o) => o.i === wanted) ? wanted : (options[0]?.i ?? null));
+/** Pilihan efektif: yang diminta bila ada di daftar, selain itu null (select menampilkan placeholder dan klik tombol mendapat guard
+ *  "pick a series and a size") — TIDAK jatuh diam-diam ke opsi pertama seperti `fill()` klasik, agar deep link `?series=` yang tidak cocok
+ *  (mis. seri settled di select Buy) tidak berubah menjadi seri lain tanpa pengguna sadar. */
+export const pickOption = (options: SelectOption[], wanted: number | null): number | null => (wanted !== null && options.some((o) => o.i === wanted) ? wanted : null);
 
 // ---------------------------------------------------------------- teks pratinjau (panel klasik, verbatim)
 

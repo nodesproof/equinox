@@ -1,14 +1,15 @@
 // EventsTable.tsx — tabel umpan event halaman Activity: Pool, Kind, Series, Amount, Block (+ ≈ waktu bila ada snapshot), Tx ↗, Actor ↗ —
 // kolom & teks sel = panel Activity klasik (`web/src/panels/activity.ts`), baris milik akun terhubung ditandai. Terbaru dulu, MAX_ROWS baris
-// pertama lalu tombol "Show more" (klasik memotong di 30). Empty-state jujur: per `eventsState` bila umpan kosong, "no match" bila filter menyaring semua.
-// ≤ 640 px (usePhone) tabel diganti daftar kartu (teks sel yang sama: pool, kind, seri, amount, blok, ≈ waktu, tx, aktor); tablet: Scroller berpudar.
-import { memo, useEffect, useState } from 'react';
+// pertama lalu tombol "Show more" (klasik memotong di 30); halaman "Show more" hanya kembali ke awal saat FILTER berganti (`filterKey`), bukan pada
+// setiap poll umpan (mergeEvents selalu mengalokasikan array baru). Empty-state jujur: per `eventsState` bila umpan kosong, "no match" bila filter
+// menyaring semua. ≤ 640 px (usePhone) tabel diganti daftar kartu (teks sel yang sama: pool, kind, seri, amount, blok, ≈ waktu, tx, aktor); tablet: Scroller berpudar.
+import { memo, useState } from 'react';
 import type { Address } from 'viem';
 import { Activity, Filter } from 'lucide-react';
 import { POOLS, POOL_KEYS, explorerAddress, explorerTx } from '@chain/deployment';
 import type { TradeEvent } from '@chain/chain/events';
 import { shortAddr, shortHash, utc } from '@chain/ui/format';
-import type { EventsState } from '@/chain/types';
+import type { EventsState, SeedMeta } from '@/chain/types';
 import { accent } from '@/components/PoolCard';
 import { feedPill } from '@/components/EventsPreview';
 import { Scroller } from '@/components/Scroller';
@@ -33,6 +34,10 @@ export interface EventsTableProps {
   timeOf: ((block: bigint) => number) | null;
   /** Filter aktif (bukan default) — empty-state "no match" + tombol clear. */
   filtered: boolean;
+  /** Kunci filter efektif (mis. `pool|kind|mine`): berganti → paging "Show more" kembali ke MAX_ROWS; poll dengan filter yang sama mempertahankan limit. */
+  filterKey: string;
+  /** Metadata seed hasil build (tanggal & blok terakhir) untuk kaki tabel; null tanpa seed. */
+  seed?: SeedMeta | null;
   onClear: () => void;
 }
 
@@ -64,11 +69,13 @@ function EventCards({ shown, account, timeOf }: { shown: TradeEvent[]; account: 
   );
 }
 
-function EventsTableView({ rows, total, eventsState, account, timeOf, filtered, onClear }: EventsTableProps) {
-  const [limit, setLimit] = useState(MAX_ROWS);
+function EventsTableView({ rows, total, eventsState, account, timeOf, filtered, filterKey, seed = null, onClear }: EventsTableProps) {
+  // Paging disimpan bersama kunci filternya; kunci berganti → state disetel ulang SAAT render (pola React "adjust state on prop change", tanpa
+  // efek/frame dengan daftar lama) ke MAX_ROWS; poll umpan (rows baru, filter sama) → limit tetap.
+  const [paging, setPaging] = useState({ key: filterKey, limit: MAX_ROWS });
+  if (paging.key !== filterKey) setPaging({ key: filterKey, limit: MAX_ROWS });
+  const limit = paging.key === filterKey ? paging.limit : MAX_ROWS;
   const phone = usePhone();
-  // Filter/umpan berganti → kembali ke halaman pertama.
-  useEffect(() => { setLimit(MAX_ROWS); }, [rows]);
   const shown = rows.slice(0, limit);
   const pill = feedPill(eventsState, total);
   const emptyTitle = eventsState === 'live' ? 'No pool events since deploy' : eventsState === 'scanning' ? 'Scanning the chain for events…' : eventsState === 'error' ? 'Event scan failed — retrying at the next refresh' : 'No events loaded yet';
@@ -116,8 +123,8 @@ function EventsTableView({ rows, total, eventsState, account, timeOf, filtered, 
         </div>
       )}
       <div className="board-panel__foot events-table__foot">
-        <span>{countNote(rows.length, total)} · newest first · {scanNote(eventsState, total)}</span>
-        {rows.length > shown.length ? <button type="button" className="soft-button" onClick={() => setLimit((l) => l + MAX_ROWS)}>Show {Math.min(MAX_ROWS, rows.length - shown.length)} more ({rows.length - shown.length} hidden)</button> : null}
+        <span>{countNote(rows.length, total)} · newest first · {scanNote(eventsState, total, seed)}</span>
+        {rows.length > shown.length ? <button type="button" className="soft-button" onClick={() => setPaging({ key: filterKey, limit: limit + MAX_ROWS })}>Show {Math.min(MAX_ROWS, rows.length - shown.length)} more ({rows.length - shown.length} hidden)</button> : null}
         {timeOf ? null : <span>≈ time needs a snapshot</span>}
       </div>
     </article>

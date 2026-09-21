@@ -10,12 +10,12 @@ import { Activity, BarChart3, ChevronRight, CircleHelp, Code2, ExternalLink, Lay
 import { ALL_SERIES, BOARDS, BUILD_TIME, CHAIN_ID, COMMIT, POOL_KEYS, POOLS, explorerAddress } from '@chain/deployment';
 import { fmtAge, shortAddr } from '@chain/ui/format';
 import { useChain } from '@/chain/provider';
-import { useNow } from '@/chain/clock';
+import { useWallet } from '@/chain/useWallet';
 import { AppMark } from '@/components/primitives';
 import { RpcBanner } from '@/components/Banner';
 import { NARROW_QUERY, useMediaQuery } from '@/hooks/useMediaQuery';
+import { useSyncStatus } from '@/hooks/useSyncStatus';
 import { buildStamp } from '@/lib/format';
-import { syncStatus } from '@/lib/sync';
 import { REPO } from '@/lib/contracts';
 
 /** Breakpoint laci navigasi (sinkron dengan `@media (max-width: 680px)` di index.css). */
@@ -54,8 +54,8 @@ export function calloutSentence(): string {
 
 /** Kartu jaringan sidebar: titik berwarna status + "live · block N" (badge aria-live ada di topbar agar tidak diumumkan dua kali). */
 function NetworkCard() {
-  const { snapshot, meta } = useChain();
-  const status = syncStatus({ snapshot, meta }, useNow());
+  const { snapshot } = useChain();
+  const status = useSyncStatus();
   return (
     <div className={`network-card network-card--${status.kind}`} title={status.error ?? undefined}>
       <div className="network-card__dot" />
@@ -71,8 +71,8 @@ function NetworkCard() {
 
 /** Badge topbar (brief §8.4: aria-live="polite" untuk live/stale): kata status di region live, umur snapshot di luar region agar detak tidak diumumkan. */
 function SyncStatus() {
-  const { snapshot, meta } = useChain();
-  const status = syncStatus({ snapshot, meta }, useNow());
+  const { snapshot } = useChain();
+  const status = useSyncStatus();
   return (
     <div className={`sync-status sync-status--${status.kind}`} title={status.error ?? undefined}>
       <span className="sync-status__dot" />
@@ -86,7 +86,7 @@ function SyncStatus() {
  *  Diekspor untuk status akun di heading halaman Trade/Portfolio (satu perilaku connect di seluruh aplikasi).
  *  `compact` (topbar): < 400 px hanya ikon (nama aksesibel lewat aria-label), ≤ 680 px teks pendek ("Connect", "Switch network"); selain itu teks penuh. */
 export function WalletButton({ compact = false }: { compact?: boolean }) {
-  const { account, wrongChain, hasWallet, busy, connect } = useChain();
+  const { account, wrongChain, hasWallet, busy, connect } = useWallet();
   const narrow = useMediaQuery(NARROW_QUERY) && compact;
   const phone = useMediaQuery(DRAWER_QUERY) && compact;
   const text = (full: string, short: string) => (narrow ? null : <span className="connect-button__text">{phone ? short : full}</span>);
@@ -123,7 +123,7 @@ export function WalletButton({ compact = false }: { compact?: boolean }) {
 
 /** Baris wallet di dalam laci (≤ 680 px): tombol penuh + keterangan jaringan/akun — tidak dirender di desktop (tombolnya ada di topbar). */
 function DrawerWallet() {
-  const { account, wrongChain, hasWallet } = useChain();
+  const { account, wrongChain, hasWallet } = useWallet();
   const hint = !hasWallet ? 'No injected wallet — read-only' : wrongChain ? `Wrong network — switch to ${NETWORK_NAME} (${CHAIN_ID})` : account ? `Connected · ${NETWORK_NAME}` : 'Not connected';
   return (
     <div className="sidebar-wallet" data-testid="drawer-wallet">

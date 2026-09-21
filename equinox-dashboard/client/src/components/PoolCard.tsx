@@ -56,9 +56,10 @@ function PoolCardView({ k, pool, emptyLabel = 'Awaiting snapshot' }: PoolCardPro
       </div>
       <div className="pool-card__meter">
         <div className="meter-heading"><span>Vega utilisation · netVega / vega cap</span><span className="mono">{pool ? pct(pool.util) : '—'}</span></div>
-        <div className="meter-track" role="meter" aria-label={`Pool ${k} vega utilisation`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pool ? Math.round(utilPct * 100) / 100 : undefined}>
-          <div className="meter-fill" style={{ width: `${Math.min(100, Math.max(0, utilPct))}%` }} />
-        </div>
+        {/* Sebelum snapshot tidak ada nilai: tanpa role meter (aria-valuenow wajib untuk meter) — balok kosong dekoratif, bukan angka 0 palsu. */}
+        {pool
+          ? <div className="meter-track" role="meter" aria-label={`Pool ${k} vega utilisation`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(utilPct * 100) / 100}><div className="meter-fill" style={{ width: `${Math.min(100, Math.max(0, utilPct))}%` }} /></div>
+          : <div className="meter-track" aria-hidden="true"><div className="meter-fill" style={{ width: '0%' }} /></div>}
         <div className="meter-foot">
           <span>Vega cap {pool ? `${Number(wad(pool.vegaCap, 0)).toLocaleString('en-US')} (${bpsPct(pool.cfg.vegaCapBps)} of capital ref)` : '—'}</span>
           <span>Reserve {pool ? `${pct(pool.reserveUtil)} of cap ${usdg(pool.reserveCap / ASSET_SCALE)} (${bpsPct(pool.cfg.maxUtilBps)})` : '—'}</span>

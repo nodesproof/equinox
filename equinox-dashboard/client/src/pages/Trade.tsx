@@ -2,7 +2,8 @@
 // useSeriesRows(). Pool switch (aset per pool), status akun (connect / switch / read-only), faucet mint (A/B) atau tautan Paxos (C), approve bila
 // allowance < ALLOWANCE_MIN, deposit/redeem (+ preview), buy (seri open, preview indikatif + jalur eksekusi "executed ≈ … (max …)"), close
 // (posisi, "(min …)"), claim (seri settled), log tx. Semua tombol aksi digerbangi `canAct` (wallet, akun, jaringan, busy) lalu guard useTrade.
-// Prefill `#/trade?pool=B&series=3` saat mount dan setiap hashchange; keempat pratinjau diterbitkan ulang setiap snapshot baru (putusan Task 2).
+// Prefill `#/trade?pool=B&series=3` saat mount dan setiap hashchange (seri yang tidak ada di daftar → select tetap "pick …", tanpa fallback diam-diam);
+// keempat pratinjau diterbitkan ulang setiap snapshot baru (putusan Task 2).
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { formatUnits, type Address } from 'viem';
 import { ChevronDown, Droplets, Info, ShieldCheck, Zap } from 'lucide-react';
@@ -76,15 +77,18 @@ function TradeIntroCard({ hasWallet }: { hasWallet: boolean }) {
   );
 }
 
-/** Select seri/posisi: opsi dari `SelectOption[]`; daftar kosong → satu opsi placeholder bernilai '' dan select dinonaktifkan (`fill()` klasik). */
-function SeriesSelect({ id, label, options, value, onChange, empty, describedBy }: { id: string; label: string; options: SelectOption[]; value: number | null; onChange: (i: number | null) => void; empty: string; describedBy?: string }) {
+/** Select seri/posisi: opsi dari `SelectOption[]`; daftar kosong → satu opsi placeholder bernilai '' dan select dinonaktifkan; belum ada pilihan
+ *  (`value` null — tidak ada fallback diam-diam ke opsi pertama) → placeholder `pick …` bernilai '' di atas daftar. */
+function SeriesSelect({ id, label, options, value, onChange, empty, placeholder, describedBy }: { id: string; label: string; options: SelectOption[]; value: number | null; onChange: (i: number | null) => void; empty: string; placeholder: string; describedBy?: string }) {
   return (
     <div className="series-select">
       <label className="control-label" htmlFor={id}>{label}</label>
       <div className="select-like">
         <select id={id} value={value === null ? '' : String(value)} disabled={options.length === 0} aria-describedby={describedBy}
           onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}>
-          {options.length ? options.map((o) => <option key={o.i} value={String(o.i)}>{o.text}</option>) : <option value="">{empty}</option>}
+          {options.length
+            ? <>{value === null ? <option value="">{placeholder}</option> : null}{options.map((o) => <option key={o.i} value={String(o.i)}>{o.text}</option>)}</>
+            : <option value="">{empty}</option>}
         </select>
         <ChevronDown size={15} aria-hidden="true" />
       </div>
@@ -230,7 +234,7 @@ export default function Trade() {
           <fieldset className="trade-field">
             <legend className="trade-field__legend"><Zap size={12} aria-hidden="true" /> Buy <span>open series</span></legend>
             <div className="trade-field__row">
-              <SeriesSelect id="buy-series" label="Series" options={buyOptions} value={buySel} onChange={(i) => setPicks((p) => ({ ...p, buy: i }))} empty={snapshot ? 'no open series' : emptyLabel} describedBy="buy-preview" />
+              <SeriesSelect id="buy-series" label="Series" options={buyOptions} value={buySel} onChange={(i) => setPicks((p) => ({ ...p, buy: i }))} empty={snapshot ? 'no open series' : emptyLabel} placeholder="pick a series" describedBy="buy-preview" />
               <AmountInput id="buy-size" label="Size" value={fields.buySize} onChange={field('buySize')} suffix="units" placeholder="units, e.g. 0.1" describedBy="buy-preview" />
             </div>
             <PreviewLine id="buy-preview" preview={previews.buy} render={(p) => buyPreviewText(p, symbol)} active={buySel !== null && buyAmt !== null} idle="pick a series and a size for an indicative quote (quoteBuy)" />
@@ -240,7 +244,7 @@ export default function Trade() {
           <fieldset className="trade-field">
             <legend className="trade-field__legend">Close <span>your positions</span></legend>
             <div className="trade-field__row">
-              <SeriesSelect id="close-series" label="Position" options={closeOptions} value={closeSel} onChange={(i) => setPicks((p) => ({ ...p, close: i }))} empty={account ? (user ? 'no open positions' : emptyLabel) : 'connect wallet to see positions'} describedBy="close-preview" />
+              <SeriesSelect id="close-series" label="Position" options={closeOptions} value={closeSel} onChange={(i) => setPicks((p) => ({ ...p, close: i }))} empty={account ? (user ? 'no open positions' : emptyLabel) : 'connect wallet to see positions'} placeholder="pick a position" describedBy="close-preview" />
               <AmountInput id="close-size" label="Size" value={fields.closeSize} onChange={field('closeSize')} suffix="units" placeholder="units ≤ position" describedBy="close-preview" />
             </div>
             <PreviewLine id="close-preview" preview={previews.close} render={(p) => closePreviewText(p, symbol)} active={closeSel !== null && closeAmt !== null} idle="pick a position and a size for an indicative quote (quoteClose)" />
@@ -249,7 +253,7 @@ export default function Trade() {
 
           <fieldset className="trade-field">
             <legend className="trade-field__legend">Claim <span>settled series</span></legend>
-            <SeriesSelect id="claim-series" label="Settled position" options={claimOptions} value={claimSel} onChange={(i) => setPicks((p) => ({ ...p, claim: i }))} empty={account ? (user ? 'nothing to claim' : emptyLabel) : 'connect wallet to see positions'} describedBy="claim-preview" />
+            <SeriesSelect id="claim-series" label="Settled position" options={claimOptions} value={claimSel} onChange={(i) => setPicks((p) => ({ ...p, claim: i }))} empty={account ? (user ? 'nothing to claim' : emptyLabel) : 'connect wallet to see positions'} placeholder="pick a settled position" describedBy="claim-preview" />
             <p id="claim-preview" className={`preview-line ${claim ? 'mono' : 'preview-line--idle'}`} data-state={claim ? 'value' : 'idle'}>{claim ? claimPreviewText(claim, symbol) : 'units × payoutPerUnit = payout, for settled series you hold'}</p>
             <Actions guard={guards.claim}><button type="button" className="button-primary button-small" disabled={!canAct} onClick={() => act('claim', actions.claim(pool, claimSel))}>Claim</button></Actions>
           </fieldset>

@@ -313,6 +313,8 @@ h3 { margin-top: 6px; color: #f3f6fb; font-size: 15px; font-weight: 600; letter-
 .button-primary:disabled, .button-ghost:disabled, .soft-button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
 .button-primary:disabled:hover { background: #f2c94c; border-color: #f2c94c; transform: none; box-shadow: none; }
 .txlog { margin: 0; padding: 0 21px 14px; list-style: none; border-top: 1px solid #22304a; }
+/* Region aria-live selalu ada (Task 6c): saat kosong tidak memakan ruang — teks "No transactions yet." berdiri di sampingnya. */
+.txlog:empty { padding: 0; border-top: 0; }
 .txlog__line { display: flex; gap: 8px; padding: 10px 0; border-bottom: 1px solid rgba(34, 48, 74, .5); color: #e6edf7; font: 11px "Martian Mono", monospace; line-height: 1.55; overflow-wrap: anywhere; }
 .txlog__line--ok { color: #4cd28a; }.txlog__line--bad { color: #f06a6a; }.txlog__line--pending { color: #f0a35c; }
 .txlog__line .muted { color: #8fa0bb; }.txlog__line a { color: #f2c94c; white-space: nowrap; }.txlog__line a:hover { text-decoration: underline; }
