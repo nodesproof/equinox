@@ -22,5 +22,14 @@ export default defineConfig({
   },
   define: { __COMMIT__: JSON.stringify(commit()), __BUILD_TIME__: JSON.stringify(new Date().toISOString()) },
   server: { fs: { allow: [ROOT, WEB, path.dirname(MANIFEST)] } },
-  build: { outDir: path.resolve(ROOT, 'dist'), emptyOutDir: true, target: 'es2022', sourcemap: false },
+  build: {
+    outDir: path.resolve(ROOT, 'dist'), emptyOutDir: true, target: 'es2022', sourcemap: false,
+    // Dua chunk vendor statis (viem + dependensinya, React + router) agar chunk aplikasi kecil dan cache vendor bertahan antar deploy;
+    // semuanya tetap dimuat di awal (modulepreload) — bukan lazy — sehingga anggaran 250 KB gzip `scripts/size.mjs` tetap menghitung semuanya.
+    rollupOptions: { output: { manualChunks(id) {
+      if (/node_modules\/(viem|ox|abitype|isows|@noble\/[^/]+|@scure\/[^/]+)\//.test(id)) return 'viem';
+      if (/node_modules\/(react|react-dom|scheduler|use-sync-external-store|wouter|regexparam)\//.test(id)) return 'react';
+      return undefined;
+    } } },
+  },
 });
