@@ -1,7 +1,7 @@
-import type { ComponentType, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 // Primitif tampilan bersama (dipotong dari scaffold Home.tsx). Semua nilai angka datang dari props —
-// tidak ada literal on-chain di sini; tanpa nilai, tampilkan "—" + alasan (brief §7.5).
+// tidak ada literal on-chain di sini; tanpa nilai, tampilkan "—" + alasan (brief §7.5). MetricCard ada di components/MetricCard.tsx.
 
 /** Logo cincin emas Equinox (murni CSS, lihat .brand-mark di index.css). */
 export function AppMark({ small = false }: { small?: boolean }) {
@@ -36,30 +36,14 @@ export function EmptyValue({ label = "Awaiting snapshot" }: { label?: string }) 
   );
 }
 
-export type Tone = "neutral" | "gold" | "green" | "violet";
-type IconComponent = ComponentType<{ size?: number | string; strokeWidth?: number | string; className?: string }>;
-
-/** Kartu metrik; tanpa `value` → EmptyValue (skeleton jujur, bukan angka palsu). */
-export function MetricCard({ label, value, suffix, meta, tone = "neutral", icon: Icon, emptyLabel = "Awaiting snapshot" }: {
-  label: string; value?: string; suffix?: string; meta: string; tone?: Tone; icon: IconComponent; emptyLabel?: string;
-}) {
-  const loading = value === undefined;
-  return (
-    <article className={`metric-card metric-card--${tone}`}>
-      <div className="metric-card__top">
-        <span className="metric-card__label">{label}</span>
-        <span className="metric-card__icon"><Icon size={15} strokeWidth={1.8} /></span>
-      </div>
-      <div className={`metric-card__value ${loading ? "metric-card__value--loading" : ""}`}>
-        {loading ? <EmptyValue label={emptyLabel} /> : <>{value}<span>{suffix}</span></>}
-      </div>
-      <div className="metric-card__meta">{meta}</div>
-    </article>
-  );
+/** Balok skeleton (memuat) — tanpa angka; `width` dalam px atau %. Animasi dimatikan oleh prefers-reduced-motion (index.css). */
+export function SkeletonLine({ width = "60%", height = 10 }: { width?: number | string; height?: number }) {
+  return <span className="skeleton-line" style={{ width, height }} aria-hidden="true" />;
 }
 
-export function StatusPill({ children, tone = "muted" }: { children: ReactNode; tone?: "muted" | "good" | "warn" | "gold" }) {
-  return <span className={`status-pill status-pill--${tone}`}><span className="status-pill__dot" />{children}</span>;
+export type PillTone = "muted" | "good" | "warn" | "gold" | "bad";
+export function StatusPill({ children, tone = "muted", title }: { children: ReactNode; tone?: PillTone; title?: string }) {
+  return <span className={`status-pill status-pill--${tone}`} title={title}><span className="status-pill__dot" />{children}</span>;
 }
 
 /** Sparkline kecil: `points` = deret nilai (dinormalkan ke tinggi 46); tanpa data → hanya garis dasar. */

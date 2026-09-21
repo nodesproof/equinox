@@ -1,76 +1,101 @@
-import { Link } from "wouter";
-import { Activity, ArrowUpRight, BookOpen, ChevronRight, Clock3, ExternalLink, Gauge, LineChart, Radio, ShieldCheck, Sparkles, Zap } from "lucide-react";
+// Overview.tsx — halaman ringkasan HIDUP: setiap angka datang dari snapshot/selector ChainProvider (satu blok per refresh), format via @chain/ui/format.
+// State: snapshot null → skeleton tanpa angka ("Awaiting snapshot" / "RPC error — retrying"); stale/error → data lama tetap (banner di Layout); live.
+// Umur & countdown memakai jam useNow() hanya di sub-komponen kecil (FeedMetric, ExpiryMetric) — panel berat di-memo pada data snapshot.
+import { Link } from 'wouter';
+import { Activity, ArrowUpRight, BookOpen, Clock3, Gauge, LineChart, ShieldCheck, Sparkles, Zap } from 'lucide-react';
+import { BOARDS, POOL_KEYS } from '@chain/deployment';
+import type { Snapshot, VolState } from '@chain/chain/snapshot';
+import { fmtAge, fmtCountdown, pct, utc, wad } from '@chain/ui/format';
+import { useSnapshot } from '@/chain/useSnapshot';
+import { useEvents } from '@/chain/useEvents';
+import { T_MIN, useBoards, usePools, useSeriesRows, type BoardView } from '@/chain/selectors';
+import { useNow } from '@/chain/clock';
+import { MetricCard } from '@/components/MetricCard';
+import { PoolCard } from '@/components/PoolCard';
+import { SigmaChart } from '@/components/SigmaChart';
+import { ParityPanel } from '@/components/ParityPanel';
+import { EventsPreview } from '@/components/EventsPreview';
+import { BoardSummary } from '@/components/BoardSummary';
+import { EmptyValue, SectionHeading } from '@/components/primitives';
+import { usd } from '@/lib/format';
 
-import { POOL_KEYS, POOLS, explorerAddress, type PoolKey } from "@chain/deployment";
-import { EmptyValue, MetricCard, SectionHeading, StatusPill } from "@/components/primitives";
+/** Alasan nilai kosong: memuat vs muat pertama gagal (banner + retry ada di Layout). */
+const emptyReason = (failed: boolean) => (failed ? 'RPC error — retrying' : 'Awaiting snapshot');
 
-// Overview statis (Task 1): kerangka + state kosong yang jujur. Tidak ada angka on-chain di sumber —
-// setiap nilai "—" menunggu snapshot (hook data layer datang di task berikutnya).
-
-/** Aksen kartu per pool: A (Solidity) emas, pool Stylus ungu. */
-const accent = (k: PoolKey) => (k === "A" ? "gold" : "violet");
-/** "Pool A — control (BlackScholesSol)" → "control (BlackScholesSol)". */
-const poolTagline = (k: PoolKey) => POOLS[k].label.split(" — ")[1] ?? POOLS[k].label;
-const assetTagline = (k: PoolKey) => (POOLS[k].faucet === "paxos" ? `${POOLS[k].assetSymbol} · Paxos (testnet)` : `${POOLS[k].assetSymbol} · mock, open faucet`);
-
-function PoolCard({ k }: { k: PoolKey }) {
-  const tone = accent(k);
+/** ETH/USD Chainlink + umur round (jam dinding) + peringatan bila round lebih tua dari heartbeat × staleMult (`cfg()` pool pertama) relatif ke blockTime — kuotasi revert OracleStale. */
+function FeedMetric({ snapshot, emptyLabel }: { snapshot: Snapshot | null; emptyLabel: string }) {
+  const now = useNow();
+  if (!snapshot) return <MetricCard label="ETH / USD" meta="Chainlink ETH/USD · real testnet feed" tone="gold" icon={LineChart} emptyLabel={emptyLabel} />;
+  const cfg = snapshot.pools[POOL_KEYS[0]!].cfg;
+  const maxAge = cfg.heartbeat * cfg.staleMult;
+  const oracleStale = snapshot.blockTime - snapshot.feed.updatedAt > maxAge;
   return (
-    <article className={`pool-card pool-card--${tone}`}>
-      <div className="pool-card__top">
-        <div className="pool-card__identity">
-          <div className={`pool-orb pool-orb--${tone}`}>{k}</div>
-          <div>
-            <div className="pool-card__name">Pool {k} <span>{poolTagline(k)}</span></div>
-            <div className="pool-card__math">{assetTagline(k)}</div>
-          </div>
-        </div>
-        <a className="icon-link" href={explorerAddress(POOLS[k].pool)} target="_blank" rel="noopener noreferrer" aria-label={`Open Pool ${k} on Arbiscan`}><ExternalLink size={15} /></a>
-      </div>
-      <div className="pool-card__nav">
-        <div><span className="data-label">NAV</span><strong><EmptyValue /></strong></div>
-        <div><span className="data-label">Free liquidity</span><strong><EmptyValue /></strong></div>
-      </div>
-      <div className="pool-card__meter">
-        <div className="meter-heading"><span>Utilisation</span><span className="mono">—</span></div>
-        <div className="meter-track"><div className="meter-fill" style={{ width: "0%" }} /></div>
-        <div className="meter-foot"><span>Vega cap —</span><span>Reserve cap —</span></div>
-      </div>
-      <Link href="/boards" className="text-button">Inspect series <ChevronRight size={14} /></Link>
-    </article>
+    <MetricCard label="ETH / USD" value={usd(snapshot.feed.answer)} suffix="USD" tone={oracleStale ? 'warn' : 'gold'} icon={LineChart}
+      meta={oracleStale
+        ? <>Chainlink round {utc(snapshot.feed.updatedAt)} is older than heartbeat × staleMult ({fmtCountdown(maxAge)}) at block time — quotes revert <b>OracleStale</b></>
+        : <>Chainlink · updated {fmtAge(now / 1000 - snapshot.feed.updatedAt)} · {utc(snapshot.feed.updatedAt)}</>} />
   );
 }
 
-function SigmaChartPanel() {
+/** Board berikutnya yang belum settle: countdown dari blockTime, dimajukan oleh detik dinding sejak snapshot diambil (anchor = waktu blok, bukan jam). */
+export function nextBoard(boards: BoardView[]): BoardView | null {
+  return boards.find((b) => b.status === 'open' || b.status === 'blackout') ?? boards.find((b) => b.status === 'expired') ?? null;
+}
+function ExpiryMetric({ snapshot, boards, emptyLabel }: { snapshot: Snapshot | null; boards: BoardView[]; emptyLabel: string }) {
+  const now = useNow();
+  const meta = 'Friday 08:00 UTC boards · countdown from block time';
+  if (!snapshot) return <MetricCard label="Next expiry" meta={meta} tone="green" icon={Clock3} emptyLabel={emptyLabel} />;
+  const b = nextBoard(boards);
+  if (!b) return <MetricCard label="Next expiry" meta="Every manifest board is settled — new boards are listed after each Friday settlement" tone="green" icon={Clock3} emptyLabel="No open board" />;
+  if (b.status === 'expired') {
+    return <MetricCard label="Next expiry" value="expired" tone="warn" icon={Clock3} meta={<>Board #{b.board.id} · {utc(b.board.expiry)} · awaiting settle (permissionless <b>settle</b> after expiry)</>} />;
+  }
+  const elapsed = Math.max(0, (now - snapshot.fetchedAtMs) / 1000);
+  const left = b.secondsToExpiry - elapsed;
   return (
-    <article className="panel chart-panel">
-      <div className="panel-header">
-        <div>
-          <div className="eyebrow">Volatility engine</div>
-          <h3>Observed σ_base</h3>
-        </div>
-        <div className="chart-legend"><span className="legend-dot legend-dot--gold" />σ_base <span className="legend-dot legend-dot--muted" />no events yet</div>
+    <MetricCard label="Next expiry" value={left <= 0 ? 'now' : fmtCountdown(left)} tone={b.status === 'blackout' ? 'warn' : 'green'} icon={Clock3}
+      meta={<>Board #{b.board.id} · {utc(b.board.expiry)} · {b.status === 'blackout' ? `blackout — no trades in the last ${T_MIN} s` : `from block ${snapshot.blockNumber} time`}</>} />
+  );
+}
+
+/** Panel engine: rumus σ_mark(u) + parameter `params()` dari snapshot.vol (VRP, α, spread, σ_min/σ_max, λ) dan observasi terakhir — tidak ada literal. */
+function EnginePanel({ vol, emptyLabel }: { vol: VolState | null; emptyLabel: string }) {
+  const row = (label: string, value: string | null, unit?: string) => (
+    <div><span>{label}</span><strong>{value === null ? <EmptyValue label={emptyLabel} /> : <>{value}{unit ? <span className="param-unit">{unit}</span> : null}</>}</strong></div>
+  );
+  return (
+    <article className="panel engine-panel">
+      <div className="panel-header"><div><div className="eyebrow">Engine parameters</div><h3>Endogenous volatility</h3></div><span className="chip chip--muted">params() on-chain</span></div>
+      <div className="engine-equation"><span>σ_mark(u)</span><strong>= clamp(σ_base, σ_min, σ_max) × VRP × (1 + α·u)</strong></div>
+      <div className="param-list">
+        {row('VRP multiplier', vol ? wad(vol.vrp, 2) : null, '×')}
+        {row('Inventory sensitivity α', vol ? wad(vol.alpha, 2) : null)}
+        {row('Buy / close spread', vol ? pct(vol.spread) : null)}
+        {row('σ clamp [σ_min, σ_max]', vol ? `${wad(vol.sigmaMin, 2)} – ${wad(vol.sigmaMax, 2)}` : null)}
+        {row('EWMA decay λ', vol ? wad(vol.lambdaPerDay, 2) : null, '/ day')}
+        {row('Last observation', vol ? utc(vol.lastTs) : null)}
       </div>
-      <div className="chart-wrap">
-        <div className="chart-y-labels" aria-hidden="true" />
-        <svg className="engine-chart" viewBox="0 0 720 220" preserveAspectRatio="none" role="img" aria-label="Sigma base chart awaiting Observed events">
-          {[28, 82, 136, 190].map((y) => <line key={y} x1="0" x2="720" y1={y} y2={y} className="chart-grid" />)}
-        </svg>
-        <div className="chart-empty"><Radio size={18} /><span>No Observed events loaded</span><small>Seed + chain scan populate this view once the data layer is wired</small></div>
-      </div>
-      <div className="chart-footer"><span>Chain time · UTC</span><span className="mono">lastRoundId —</span></div>
+      <div className="engine-note"><ShieldCheck size={15} /><span>One engine shared by every pool · same Chainlink feed · pool quotes may diverge by inventory (σ_mark(util)), never by math</span></div>
     </article>
   );
 }
 
 export default function Overview() {
+  const { snapshot, parity, gas, failed } = useSnapshot();
+  const pools = usePools();
+  const boards = useBoards();
+  const rows = useSeriesRows();
+  const { trades, observed, eventsState } = useEvents();
+  const emptyLabel = emptyReason(failed);
+  const vol = snapshot?.vol ?? null;
+
   return (
     <div className="page-stack">
       <div className="hero-row">
         <div>
           <div className="eyebrow eyebrow--accent"><Sparkles size={13} /> On-chain options infrastructure</div>
           <h1>The options edge,<br /><em>read at the source.</em></h1>
-          <p className="hero-copy">A transparent control surface for European ETH options priced on-chain, endogenous volatility derived from Chainlink prints, and the byte-identical math parity behind it.</p>
+          <p className="hero-copy">A transparent control surface for European ETH options priced on-chain, endogenous volatility derived from Chainlink prints, and the byte-identical math parity behind it. Every number below is read from one block-pinned snapshot of Arbitrum Sepolia.</p>
         </div>
         <div className="hero-actions">
           <Link href="/trade" className="button-primary"><Zap size={16} /> Explore trade</Link>
@@ -78,61 +103,39 @@ export default function Overview() {
         </div>
       </div>
 
-      <div className="notice-banner" role="status">
-        <div className="notice-banner__icon"><Radio size={16} /></div>
-        <div>
-          <strong>Chain snapshot not wired in this build</strong>
-          <span>Numeric fields stay empty by design until the block-pinned snapshot hooks land. Nothing on this page is fabricated.</span>
-        </div>
-      </div>
-
       <section className="metrics-grid" aria-label="Key metrics">
-        <MetricCard label="ETH / USD" meta="Chainlink · age —" tone="gold" icon={LineChart} />
-        <MetricCard label="σ base" meta="Annualised · EWMA of realised variance" icon={Activity} />
-        <MetricCard label="σ mark (0)" meta="VRP applied · zero utilisation" tone="violet" icon={Gauge} />
-        <MetricCard label="Next expiry" meta="Friday 08:00 UTC · countdown from block time" tone="green" icon={Clock3} />
+        <FeedMetric snapshot={snapshot} emptyLabel={emptyLabel} />
+        <MetricCard label="σ base" value={vol ? wad(vol.sigmaBase) : undefined} icon={Activity} emptyLabel={emptyLabel}
+          meta={vol ? <>Annualised EWMA of realised variance · λ {wad(vol.lambdaPerDay, 2)}/day · clamp [{wad(vol.sigmaMin, 2)}, {wad(vol.sigmaMax, 2)}]</> : 'Annualised · EWMA of realised variance'} />
+        <MetricCard label="σ mark (0)" value={vol ? wad(vol.sigmaMark0) : undefined} tone="violet" icon={Gauge} emptyLabel={emptyLabel}
+          meta={vol ? <>= σ_base × VRP <b>{wad(vol.vrp, 2)}</b> · α <b>{wad(vol.alpha, 2)}</b> · spread <b>{pct(vol.spread)}</b> · zero utilisation</> : 'VRP applied · zero utilisation'} />
+        <ExpiryMetric snapshot={snapshot} boards={boards} emptyLabel={emptyLabel} />
       </section>
 
       <div className="two-col two-col--wide">
-        <SigmaChartPanel />
-        <article className="panel engine-panel">
-          <div className="panel-header"><div><div className="eyebrow">Engine parameters</div><h3>Endogenous volatility</h3></div><span className="chip chip--muted">On-chain</span></div>
-          <div className="engine-equation"><span>σ_mark(u)</span><strong>= clamp(σ_base) × VRP × (1 + α·u)</strong></div>
-          <div className="param-list">
-            <div><span>VRP multiplier</span><strong><EmptyValue label="Awaiting params()" /></strong></div>
-            <div><span>Inventory sensitivity α</span><strong><EmptyValue label="Awaiting params()" /></strong></div>
-            <div><span>Buy / close spread</span><strong><EmptyValue label="Awaiting params()" /></strong></div>
-            <div><span>Observation interval</span><strong><EmptyValue label="Awaiting params()" /></strong></div>
-          </div>
-          <div className="engine-note"><ShieldCheck size={15} /><span>Shared engine · same Chainlink feed · pool quotes may diverge by inventory</span></div>
-        </article>
+        <SigmaChart observed={observed} eventsState={eventsState} vol={vol} />
+        <EnginePanel vol={vol} emptyLabel={emptyLabel} />
       </div>
 
       <section>
-        <SectionHeading eyebrow="Capital layer" title="One vault per pool, one source of truth" detail="Pools differ only in the math implementation (Solidity vs Stylus) and, for the Paxos pool, the settlement asset. Every pool metric below is block-pinned when live." action={<Link href="/boards" className="button-ghost button-small">Compare series <ArrowUpRight size={14} /></Link>} />
-        <div className="pool-grid">{POOL_KEYS.map((k) => <PoolCard key={k} k={k} />)}</div>
+        <SectionHeading eyebrow="Capital layer" title="One vault per pool, one source of truth"
+          detail="Pools differ only in the math implementation (Solidity vs Stylus) and, for the Paxos pool, the settlement asset. Every pool metric below is pinned to the snapshot block; caps use the bps from each pool's cfg()."
+          action={<Link href="/boards" className="button-ghost button-small">Compare series <ArrowUpRight size={14} /></Link>} />
+        <div className="pool-grid">
+          {POOL_KEYS.map((k) => <PoolCard key={k} k={k} pool={pools.find((p) => p.k === k) ?? null} emptyLabel={emptyLabel} />)}
+        </div>
+      </section>
+
+      <section>
+        <SectionHeading eyebrow="Boards" title="Series around the money"
+          detail={`ATM ± 2 rows per board (${BOARDS.length} boards in the manifest); buy quotes are per 1.0 unit at each pool's inventory — the full table with close, Δ, OI and Greeks lives on Boards.`}
+          action={<Link href="/boards" className="button-ghost button-small">All series <ArrowUpRight size={14} /></Link>} />
+        <BoardSummary boards={boards} spotWad={snapshot?.feed.spotWad ?? null} emptyLabel={emptyLabel} />
       </section>
 
       <div className="two-col">
-        <article className="panel parity-panel">
-          <div className="panel-header"><div><div className="eyebrow">K5 verification</div><h3>Byte-identical math</h3></div><StatusPill tone="muted">Parity —</StatusPill></div>
-          <div className="parity-visual">
-            <div className="parity-node"><span>A</span><small>Solidity</small></div>
-            <div className="parity-line"><span>same inputs</span><i /><i /><i /></div>
-            <div className="parity-node"><span>B</span><small>Stylus</small></div>
-          </div>
-          <p className="panel-copy">Both math contracts return byte-identical price and Greeks tuples for identical inputs. Pool quotes can still differ because inventory diverges.</p>
-          <Link href="/contracts" className="text-button">View verification surface <ChevronRight size={14} /></Link>
-        </article>
-        <article className="panel activity-empty">
-          <div className="panel-header"><div><div className="eyebrow">Latest activity</div><h3>Events feed</h3></div><StatusPill tone="muted">No scan yet</StatusPill></div>
-          <div className="empty-state">
-            <div className="empty-state__icon"><Activity size={19} /></div>
-            <strong>No events loaded</strong>
-            <span>Trades, settlements, claims and observations will appear here once the event seed and chain scan are wired.</span>
-            <Link href="/activity" className="soft-button">Open activity <ArrowUpRight size={14} /></Link>
-          </div>
-        </article>
+        <ParityPanel rows={rows} parityRead={parity.length > 0} gas={gas} blockNumber={snapshot?.blockNumber ?? null} emptyLabel={emptyLabel} />
+        <EventsPreview trades={trades} eventsState={eventsState} />
       </div>
     </div>
   );
