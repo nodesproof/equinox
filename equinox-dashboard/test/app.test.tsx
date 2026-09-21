@@ -41,6 +41,20 @@ describe('App shell', () => {
     expect(screen.getAllByText('Awaiting snapshot').length).toBeGreaterThanOrEqual(BOARDS.length);
   });
 
+  it('routes #/trade and #/portfolio to the live pages: read-only without an injected wallet, no account numbers', () => {
+    window.location.hash = '#/trade';
+    const { unmount } = render(<App client={offline} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Trade' })).toBeInTheDocument();
+    expect(screen.getByTestId('trade-note')).toHaveAttribute('data-kind', 'no-wallet');
+    expect(screen.getByRole('button', { name: /^Buy$/ })).toBeDisabled();
+    unmount();
+    window.location.hash = '#/portfolio';
+    render(<App client={offline} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Portfolio' })).toBeInTheDocument();
+    expect(screen.getByText('Connect a wallet to see your portfolio')).toBeInTheDocument();
+    expect(document.querySelector('.balance-card')).toBeNull();
+  });
+
   it('falls back to "Not found" for unknown hashes', () => {
     window.location.hash = '#/nope';
     render(<App client={offline} />);

@@ -76,8 +76,9 @@ function SyncStatus() {
   );
 }
 
-/** Tombol wallet: tanpa wallet → penjelasan read-only (toast); tanpa akun → connect; salah jaringan → switch; ada akun → alamat (tautan explorer). */
-function WalletButton() {
+/** Tombol wallet: tanpa wallet → penjelasan read-only (toast); tanpa akun → connect; salah jaringan → switch; ada akun → alamat (tautan explorer).
+ *  Diekspor untuk status akun di heading halaman Trade/Portfolio (satu perilaku connect di seluruh aplikasi). */
+export function WalletButton() {
   const { account, wrongChain, hasWallet, busy, connect } = useChain();
   if (!hasWallet) {
     return (

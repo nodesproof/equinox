@@ -9,8 +9,8 @@ import { ALL_SERIES, BOARDS, POOL_KEYS, type PoolKey } from '@chain/deployment';
 export function hashQuery(hash: string = typeof window !== 'undefined' ? window.location.hash : ''): URLSearchParams {
   return new URLSearchParams(hash.split('?')[1] ?? '');
 }
-/** Tautan prefill Trade: `k` = pool, `seriesIndex` = posisi di ALL_SERIES (= `SeriesView.i`, parameter useTrade). */
-export const tradeHref = (k: PoolKey, seriesIndex: number) => `#/trade?pool=${k}&series=${seriesIndex}`;
+/** Tautan prefill Trade: `k` = pool, `seriesIndex` = posisi di ALL_SERIES (= `SeriesView.i`, parameter useTrade); tanpa seri → hanya pool (`#/trade?pool=B`). */
+export const tradeHref = (k: PoolKey, seriesIndex?: number) => (seriesIndex === undefined ? `#/trade?pool=${k}` : `#/trade?pool=${k}&series=${seriesIndex}`);
 /** Tautan Boards, opsional difokuskan ke satu board (`#/boards?board=1`). */
 export const boardsHref = (boardId?: number) => (boardId === undefined ? '#/boards' : `#/boards?board=${boardId}`);
 

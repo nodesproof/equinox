@@ -8,6 +8,7 @@ import { pct, usdg, wad } from '@chain/ui/format';
 import { ASSET_SCALE, type PoolView } from '@/chain/selectors';
 import { EmptyValue, SkeletonLine, StatusPill } from '@/components/primitives';
 import { bpsPct } from '@/lib/format';
+import { tradeHref } from '@/lib/route';
 
 /** Aksen kartu per pool: A (Solidity) emas, pool Stylus ungu. */
 export const accent = (k: PoolKey) => (k === 'A' ? 'gold' : 'violet');
@@ -75,7 +76,7 @@ function PoolCardView({ k, pool, emptyLabel = 'Awaiting snapshot' }: PoolCardPro
       </dl>
       <div className="pool-card__actions">
         <Link href="/boards" className="text-button">Inspect series <ChevronRight size={14} /></Link>
-        <Link href="/trade" className="text-button">Trade on {k} <Zap size={13} /></Link>
+        <a href={tradeHref(k)} className="text-button">Trade on {k} <Zap size={13} /></a>
       </div>
     </article>
   );
