@@ -28,7 +28,8 @@ export function AmountInput({ id, label, value, onChange, suffix, placeholder, d
           aria-labelledby={`${labelId} ${unitId}`} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} />
         {/* Hiasan kanan (tombol max + satuan) satu baris rata kanan; padding-right input mengikuti modifier --max agar placeholder tidak tertutup. */}
         <div className="input-adorn">
-          {max ? <button type="button" className="input-max" onClick={max.onClick} disabled={max.disabled} title={max.title} aria-label={`${max.title ?? 'Use the maximum'}`}>max</button> : null}
+          {/* Nama aksesibel diawali teks yang terlihat ("max …", WCAG 2.5.3 label-in-name), lalu penjelasan dari `title`. */}
+          {max ? <button type="button" className="input-max" onClick={max.onClick} disabled={max.disabled} title={max.title} aria-label={`max — ${max.title ?? 'use the maximum'}`}>max</button> : null}
           <span id={unitId}>{suffix}</span>
         </div>
       </div>

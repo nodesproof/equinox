@@ -112,6 +112,10 @@ describe('Trade — wallet states', () => {
     expect(screen.getByRole('textbox', { name: `Amount (${assetLabel('B')}) ${POOLS.B.assetSymbol}` })).toBe(el('deposit-assets'));
     expect(screen.getByRole('textbox', { name: 'Shares shares' })).toBe(el('redeem-shares'));
     expect(screen.getAllByRole('textbox', { name: 'Size units' }).map((i) => i.id)).toEqual(['buy-size', 'close-size']);
+    // Label-in-name (WCAG 2.5.3, Lighthouse `label-content-name-mismatch`): the max button's accessible name starts with its visible text.
+    const maxButton = button('max — Redeem all your LP shares on this pool');
+    expect(maxButton).toHaveTextContent(/^max$/);
+    expect(maxButton).toBeEnabled();
     // Open-series select = status `open` on the pool (not settled, expiry > blockTime + 60 — the classic openRows()).
     const opts = Array.from(el<HTMLSelectElement>('buy-series').options).filter((o) => o.value !== '').map((o) => o.textContent);
     expect(opts).toEqual(openSeriesOptions(seriesViews(s, liveParity(s)), 'B').map((o) => o.text));
