@@ -19,8 +19,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # push/schedule tidak membawa input → app.
-      TARGET: ${{ inputs.target || 'app' }}
+      # dispatch → input; push/schedule → variabel repo PAGES_TARGET (set `classic` agar cadangan bertahan melewati push & jadwal harian), lalu app.
+      TARGET: ${{ inputs.target || vars.PAGES_TARGET || 'app' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

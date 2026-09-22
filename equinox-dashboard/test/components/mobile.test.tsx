@@ -306,6 +306,11 @@ describe('Task 6b — Trade, Activity and Contracts on phones', () => {
       expect(within(c).getByRole('link', { name: /Arbiscan/ })).toHaveAttribute('href', expect.stringContaining(r.address));
       expect(within(c).getByRole('link', { name: /Sourcify/ })).toHaveAttribute('href', expect.stringContaining(r.address));
     }
+    // The live owner() card: Arbiscan only (an account has no verified source).
+    const owner = document.querySelector<HTMLElement>(`.address-card[data-live="owner"][data-address="${s.pools[POOL_KEYS[0]!].owner}"]`)!;
+    expect(owner).not.toBeNull();
+    expect(within(owner).getByRole('link', { name: /Arbiscan/ })).toBeInTheDocument();
+    expect(within(owner).queryByRole('link', { name: /Sourcify/ })).toBeNull();
     const first = rows[0]!;
     fireEvent.click(within(document.querySelector<HTMLElement>(`.address-card[data-address="${first.address}"]`)!).getByRole('button', { name: `Copy ${first.label} address` }));
     await act(async () => { await Promise.resolve(); });

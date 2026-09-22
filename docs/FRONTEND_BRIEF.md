@@ -438,7 +438,7 @@ USDG: 2 dp for balances/NAV, **6 dp for quotes and payouts**; σ: 4 dp (3 in pre
 
 ## Appendix B — Implementation map
 
-**As built (Plan 5, 21–22 Sep 2026):** the frontend this brief asked for is `equinox-dashboard/` — React 19 + Vite 7 + Tailwind 4, hash routes under `/equinox/`, published by `pages.yml` since it passed every §9 item against the live chain on 22 Sep 2026 (`equinox-dashboard/ACCEPTANCE.md`). It does not copy the data layer: `web/src/{chain,deployment.ts,abi,ui/format.ts,ui/poll.ts}` is imported through the `@chain` alias, so B.2 below still describes every chain read and write.
+**As built (Plan 5, 21–22 Sep 2026):** the frontend this brief asked for is `equinox-dashboard/` — React 19 + Vite 7 + Tailwind 4, hash routes under `/equinox/`; it passed every §9 item against the live chain on 22 Sep 2026 (`equinox-dashboard/ACCEPTANCE.md`), so `pages.yml` publishes it from the Plan 5 merge on. It does not copy the data layer: `web/src/{chain,deployment.ts,abi,ui/format.ts,ui/poll.ts}` is imported through the `@chain` alias, so B.2 below still describes every chain read and write.
 
 ### B.1 React app (`equinox-dashboard/`)
 
@@ -450,7 +450,7 @@ USDG: 2 dp for balances/NAV, **6 dp for quotes and payouts**; σ: 4 dp (3 in pre
 | `client/src/pages/*.tsx` | Overview, Boards, Trade, Portfolio, Activity, Contracts — §8.1 |
 | `client/src/components/*.tsx` | Layout (sidebar, sync badge, wallet button, ≤ 680 px drawer), RPC banner, metric/pool cards, board table + phone series cards, series detail (Greeks, K5 prices), σ chart (dependency-free SVG), events table, tx log (`aria-live`), amount input, pool switch |
 | `client/src/lib/*.ts` | Pure display logic: sync states, formatting helpers on top of `@chain/ui/format`, board cells and footnote, trade sentences, activity filters and ≈ block time (two anchors), contract rows |
-| `test/` | 152 vitest + Testing Library tests rendered from snapshot fixtures (live, stale, first-load error, no wallet, wrong network, paused, oracle stale, blackout, expired, settled, no positions, seed 404) |
+| `test/` | 158 vitest + Testing Library tests rendered from snapshot fixtures (live, stale, first-load error, no wallet, wrong network, paused, oracle stale, blackout, expired, settled, no positions, seed 404) |
 | `ACCEPTANCE.md` | §9 run against the live chain: 12/12, with the commands and numbers |
 
 Run: `(cd web && npm ci) && cd equinox-dashboard && npm ci && npm run dev` → `http://localhost:5174/equinox/` (or `npm run build && npm run preview` → port 4174).

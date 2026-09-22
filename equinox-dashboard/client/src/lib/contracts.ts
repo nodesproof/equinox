@@ -2,7 +2,7 @@
 // yang diketik di sini), tautan explorer/Sourcify, baris `cfg()` per pool dan `params()` engine dengan satuan, tautan dokumentasi, dan
 // paragraf kejujuran (kalimat dari `web/src/panels/footer.ts`, daftar pool diturunkan dari manifest).
 import { CHAIN_ID, COMMIT, DEPLOYER, FEED, MATH_SOL, MATH_STYLUS, POOLS, POOL_KEYS, SEQ, USDG, VOL, type PoolKey } from '@chain/deployment';
-import type { PoolCfg, VolState } from '@chain/chain/snapshot';
+import type { PoolCfg, Snapshot, VolState } from '@chain/chain/snapshot';
 import { fmtCountdown, pct, usdg, utc, wad } from '@chain/ui/format';
 import { bpsPct } from '@/lib/format';
 import { listPools, mintPools, paxosPools } from '@/lib/trade';
@@ -45,9 +45,19 @@ export function addressRows(): AddressRow[] {
   for (const k of paxos) rows.push({ group: 'Shared', label: `${POOLS[k].assetSymbol} (Paxos, real testnet token — asset of Pool ${k})`, address: POOLS[k].asset, note: 'permissioned mint · faucet.paxos.com gives 100/day' });
   rows.push(
     { group: 'Shared', label: 'MockSequencerFeed (no L2 uptime feed on Sepolia)', address: SEQ, note: 'mock — always "up"; the real feed exists only on Arbitrum One' },
-    { group: 'Shared', label: 'Deployer / treasury (EOA)', address: DEPLOYER, note: 'owner of the pools; fees go here on this testnet deployment' },
+    // `pools.deployer` manifest = kontrak PoolE2EDeployer (punya bytecode), BUKAN owner/treasury — owner dibaca live di `ownerRows`.
+    { group: 'Shared', label: 'PoolE2EDeployer (one-shot deployment contract)', address: DEPLOYER, note: 'deployed MockUSDG, the sequencer mock, the factory and Pools A/B with the shared engine in one transaction; holds no role in the pools' },
   );
   return rows;
+}
+/** Baris live `owner()` pool dari snapshot (bukan manifest — owner bisa berpindah lewat Ownable2Step): satu baris "Shared" bila semua pool
+ *  sama, satu per pool bila berbeda; tanpa snapshot → [] (tidak ada alamat yang dikarang). Akun, bukan kontrak: tanpa tautan Sourcify. */
+export function ownerRows(snapshot: Pick<Snapshot, 'pools'> | null): AddressRow[] {
+  if (!snapshot) return [];
+  const note = 'lists boards, pauses trading, sets cfg() and the treasury — Ownable2Step, no timelock on this testnet deployment';
+  const owners = POOL_KEYS.map((k) => snapshot.pools[k].owner);
+  if (owners.every((o) => o.toLowerCase() === owners[0]!.toLowerCase())) return [{ group: 'Shared', label: 'Pool owner (live owner())', address: owners[0]!, note }];
+  return POOL_KEYS.map((k) => ({ group: `Pool ${k}`, label: `Owner ${k} (live owner())`, address: snapshot.pools[k].owner, note }));
 }
 /** Kelompok berurutan (Pool A, Pool B, …, Shared) untuk header tabel. */
 export const addressGroups = (rows: AddressRow[]): string[] => rows.map((r) => r.group).filter((g, i, a) => a.indexOf(g) === i);

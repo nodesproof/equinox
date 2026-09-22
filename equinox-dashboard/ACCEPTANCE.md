@@ -1,6 +1,6 @@
 # Acceptance — React dashboard vs `docs/FRONTEND_BRIEF.md` §9
 
-**Result: 12/12 items pass** against the live Arbitrum Sepolia deployment. This is the gate of the fallback rule (Plan 5 spec Q2): GitHub Pages now deploys this app; the classic UI in `web/` stays one `workflow_dispatch` away (`target: classic`).
+**Result: 12/12 items pass** against the live Arbitrum Sepolia deployment. This is the gate of the fallback rule (Plan 5 spec Q2): GitHub Pages now deploys this app; the classic UI in `web/` stays one `workflow_dispatch` away (`target: classic`; the repository variable `PAGES_TARGET=classic` makes it stick).
 
 **Run:** 22 Sep 2026, 22:24–22:35 UTC, blocks 311 692 907 – 311 696 553 (spot 2,744.60–2,748.64 USD, σ_base 0.5570, σ_mark(0) 0.6405; boards #0 = 25 Sep 2026 08:00 UTC and #1 = 2 Oct 2026 08:00 UTC, both open). **Build:** commit `79188ef`, `npm run build` (762 KB raw / 227 KB gzip JS), served by `vite preview` at `http://127.0.0.1:4174/equinox/` with a fresh seed (`generatedAt 2026-09-22T22:18:29Z`, `lastBlock 311692835`, 10 trades, 154 `Observed`). **Tools:** Playwright 1.61.1 (Chromium headless), Foundry `cast` 1.5.1, Lighthouse 12.8.2 on Chrome 149, the public RPC `https://sepolia-rollup.arbitrum.io/rpc` for both the app and `cast`. The drive scripts are not part of the repo (no Playwright/Lighthouse dependency here); what each one does is written out below.
 
@@ -17,7 +17,7 @@ Wallet flows use a **stub EIP-1193 provider** injected before the page loads: it
 | 7 | Wallet on mainnet → switch; 4902 → add chain | ✅ | 11/11 verdicts |
 | 8 | 375 px: no page-level horizontal scroll, actions reachable | ✅ | 6 routes, 15/15 verdicts |
 | 9 | Lighthouse mobile: Perf ≥ 90, A11y ≥ 95, BP ≥ 95 | ✅ | Perf 92–93, A11y 100, BP 96–100 on all six routes |
-| 10 | typecheck + tests + build green, network tests green, no hard-coded counts | ✅ | app 152/152, web 33/33 + 3/3 network, 227 KB gzip, grep clean |
+| 10 | typecheck + tests + build green, network tests green, no hard-coded counts | ✅ | app 152/152 at the run (158/158 after the final-review fixes), web 33/33 + 3/3 network, 227 KB gzip, grep clean |
 | 11 | Copy audit against §7 | ✅ | 21/21 verdicts on the rendered text of 13 page states |
 | 12 | Pool C: asset per pool, no mint, Paxos link, approve target, `InsufficientFunds()` decoded | ✅ | part of the 35/35 drive verdicts |
 
@@ -85,11 +85,13 @@ Viewport 375 × 812 on all six routes: `scrollWidth == innerWidth == 375` and no
 | `#/activity` | 93 | 100 | 96 | 2.3 s | 2.7 s | 100 ms | 0.004 |
 | `#/contracts` | 93 | 100 | 100 | 2.3 s | 2.7 s | 90 ms | 0.003 |
 
+**Contrast, measured outside Lighthouse.** Panels and cards sit on gradient backgrounds, so axe marks their text contrast "incomplete" and Lighthouse does not score it — its 100 did not see that the tertiary text colour `#566681` (53 rules: table headers, form labels, footnotes, revert reasons) was only 2.65–3.22:1. The final review caught it; `test/lib/contrast.test.ts` now computes the WCAG ratio of every text colour in `index.css` against its own solid background or, without one, against every app surface (`#0b1220`, `#0e1726`, `#111a2b`, `#152036`, `#18253a`): the tertiary colour is `#7f8fa9` (4.69:1 on the lightest surface, 5.31:1 on panels), placeholders `#7f8fa9` on `#152036` (4.96:1), the letter on the violet pool badge `#101522` (6.99:1); only disabled controls and decorative icons keep `#566681` (WCAG 1.4.3 exemptions).
+
 Activity's 96: the `font-size` audit counts 57.5 % of its text at ≥ 12 px (threshold 60 %; the chart note and axis labels are 9 px). Trade was 96 on accessibility before commit `79188ef` (unit-suffix contrast, and the *max* button's accessible name now starts with its visible text).
 
 ## 10. Build, tests, hard-coded counts
 
-`npm run check` (tsc, client + tests + `../web/src`) clean; `npm test` **152/152** (14 files); `npm run build` → **762 KB raw / 227 KB gzip JS** (budget 250 KB, `scripts/size.mjs`). Data layer: `cd web && npm run typecheck && npx vitest run` → **33/33** (+4 skipped network/smoke), `EQUINOX_NETWORK_TESTS=1 npx vitest run test/parity.network.test.ts` → **3/3** (parity + `math()`/`asset()` per pool + R3-a; event scan since deploy; user path on every pool). Grep over `client/src`: no `0x…` addresses, no `BOARDS[n]`/`ALL_SERIES[n]`/`seriesIds…[n]` indexing, no board/series counts or expiry timestamps (the only dates are the "25 Sep 2026 · 08:00 UTC" format examples in comments). Workflows pass `actionlint` 1.7.7.
+`npm run check` (tsc, client + tests + `../web/src`) clean; `npm test` **152/152** (14 files) at the run — **158/158** (15 files) after the final-review fixes (contrast, deployer vs live owner on Contracts, reduced-motion route scroll); `npm run build` → **762 KB raw / 227 KB gzip JS** (budget 250 KB, `scripts/size.mjs`). Data layer: `cd web && npm run typecheck && npx vitest run` → **33/33** (+4 skipped network/smoke), `EQUINOX_NETWORK_TESTS=1 npx vitest run test/parity.network.test.ts` → **3/3** (parity + `math()`/`asset()` per pool + R3-a; event scan since deploy; user path on every pool). Grep over `client/src`: no `0x…` addresses, no `BOARDS[n]`/`ALL_SERIES[n]`/`seriesIds…[n]` indexing, no board/series counts or expiry timestamps (the only dates are the "25 Sep 2026 · 08:00 UTC" format examples in comments). Workflows pass `actionlint` 1.7.7.
 
 ## 11. Copy (§7)
 

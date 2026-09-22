@@ -8,9 +8,9 @@ import { BUILD_TIME, CHAIN_ID, COMMIT, DEPLOYED_AT_BLOCK, DEPLOYER, FEED, MATH_S
 import { pct, usdg, utc, wad } from '@chain/ui/format';
 import Contracts from '@/pages/Contracts';
 import { bpsPct, buildStamp } from '@/lib/format';
-import { CFG_FIELDS, DOCS, REPO, addressRows, cfgIdentical, cfgRows, cfgValue, commitUrl, docUrl, engineRows, honestySentences, sourcifyUrl } from '@/lib/contracts';
+import { CFG_FIELDS, DOCS, REPO, addressRows, cfgIdentical, cfgRows, cfgValue, commitUrl, docUrl, engineRows, honestySentences, ownerRows, sourcifyUrl } from '@/lib/contracts';
 import { renderWithChain } from '../render';
-import { BLOCK, CFG, VOL, liveSnapshot } from '../fixtures/snapshot';
+import { BLOCK, CFG, OWNER, VOL, liveSnapshot } from '../fixtures/snapshot';
 
 afterEach(() => { cleanup(); window.location.hash = ''; });
 
@@ -25,7 +25,7 @@ describe('Contracts — addresses from the manifest', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Contracts & protocol' })).toBeInTheDocument();
     const expected: [string, string][] = [];
     for (const k of POOL_KEYS) expected.push([POOLS[k].label, POOLS[k].pool], [`Option token ${k}`, POOLS[k].token], [`Math ${k}`, POOLS[k].math]);
-    expected.push(['Shared vol engine (EWMA from Chainlink)', VOL_ADDR], ['Math A — BlackScholesSol', MATH_SOL], ['Math B — Stylus program (cached)', MATH_STYLUS], ['Chainlink ETH/USD (real)', FEED], ['MockUSDG', USDG], ['MockSequencerFeed (no L2 uptime feed on Sepolia)', SEQ], ['Deployer / treasury (EOA)', DEPLOYER]);
+    expected.push(['Shared vol engine (EWMA from Chainlink)', VOL_ADDR], ['Math A — BlackScholesSol', MATH_SOL], ['Math B — Stylus program (cached)', MATH_STYLUS], ['Chainlink ETH/USD (real)', FEED], ['MockUSDG', USDG], ['MockSequencerFeed (no L2 uptime feed on Sepolia)', SEQ], ['PoolE2EDeployer (one-shot deployment contract)', DEPLOYER]);
     if (POOL_KEYS.includes('C')) expected.push([`${POOLS.C.assetSymbol} (Paxos, real testnet token — asset of Pool C)`, POOLS.C.asset]);
     for (const [label, addr] of expected) {
       const trs = Array.from(document.querySelectorAll<HTMLElement>(`tr[data-address="${addr}"]`));
@@ -38,7 +38,8 @@ describe('Contracts — addresses from the manifest', () => {
     }
     // Table rows = helper rows; groups per pool + shared; the factory is not in the manifest → no row for it.
     const rows = addressRows();
-    expect(document.querySelectorAll('.contracts-table tr.series-row')).toHaveLength(rows.length);
+    // + one live row for the pools' owner() (every fixture pool has the same owner).
+    expect(document.querySelectorAll('.contracts-table tr.series-row')).toHaveLength(rows.length + 1);
     expect(rows.some((r) => /factory/i.test(r.label))).toBe(false);
     for (const k of POOL_KEYS) expect(screen.getByRole('rowgroup', { name: `Pool ${k}` })).toBeInTheDocument();
     expect(screen.getByRole('rowgroup', { name: 'Shared' })).toBeInTheDocument();
@@ -50,6 +51,35 @@ describe('Contracts — addresses from the manifest', () => {
     expect(sourcifyUrl(FEED)).toBe(`https://repo.sourcify.dev/${CHAIN_ID}/${FEED}`);
     // The whole page never says "mainnet".
     expect(document.body.textContent).not.toMatch(/mainnet/i);
+  });
+});
+
+describe('Contracts — deployer vs owner', () => {
+  it('the manifest deployer is the one-shot deployment contract, never the owner/treasury; the live owner() of the pools gets its own row (Arbiscan only)', () => {
+    const s = liveSnapshot();
+    expect(OWNER).not.toBe(DEPLOYER);
+    renderWithChain(<Contracts />, { snapshot: s, nowMs: s.fetchedAtMs });
+    const dep = addressRow(DEPLOYER)!;
+    expect(dep).not.toBeNull();
+    expect(dep.textContent).toContain('PoolE2EDeployer (one-shot deployment contract)');
+    expect(dep.textContent).not.toMatch(/EOA|treasury|owner of the pools/i);
+    const tr = document.querySelector<HTMLElement>(`tr[data-live="owner"][data-address="${OWNER}"]`)!;
+    expect(tr).not.toBeNull();
+    expect(tr.textContent).toContain('Pool owner (live owner())');
+    expect(within(tr).getByText(OWNER)).toBeInTheDocument();
+    expect(within(tr).getByRole('link', { name: /Arbiscan/ })).toHaveAttribute('href', explorerAddress(OWNER));
+    expect(within(tr).queryByRole('link', { name: /Sourcify/ })).toBeNull();
+    expect(ownerRows(s)).toEqual([expect.objectContaining({ group: 'Shared', label: 'Pool owner (live owner())', address: OWNER })]);
+  });
+
+  it('pools with different owners get one owner row each; without a snapshot no owner row is shown (nothing fabricated)', () => {
+    const s = liveSnapshot();
+    const other = '0x3333333333333333333333333333333333333333' as const;
+    s.pools[POOL_KEYS[0]!].owner = other;
+    expect(ownerRows(s).map((r) => [r.group, r.address])).toEqual(POOL_KEYS.map((k) => [`Pool ${k}`, k === POOL_KEYS[0] ? other : OWNER]));
+    expect(ownerRows(null)).toEqual([]);
+    renderWithChain(<Contracts />, { snapshot: null });
+    expect(document.querySelector('tr[data-live="owner"]')).toBeNull();
   });
 });
 

@@ -142,12 +142,14 @@ export function Layout({ children }: { children: ReactNode }) {
   const closeButton = useRef<HTMLButtonElement>(null);
   const drawer = useMediaQuery(DRAWER_QUERY);
 
-  // Pindah rute: tutup nav mobile dan gulir ke atas (bukan pada mount pertama).
+  // Pindah rute: tutup nav mobile dan gulir ke atas (bukan pada mount pertama). `behavior: 'smooth'` dari JS tidak ditimpa aturan CSS
+  // reduced-motion, jadi preferensinya dibaca di sini (brief §8.4); tanpa matchMedia (jsdom lama) → halus seperti sebelumnya.
   useEffect(() => {
     if (previous.current === location) return;
     previous.current = location;
     setMobileNavOpen(false);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
   }, [location]);
 
   // Laci terbuka: Escape menutup, gulir dokumen dikunci, fokus ke tombol tutup; saat tertutup fokus kembali ke hamburger (hanya bila laci pernah dibuka).

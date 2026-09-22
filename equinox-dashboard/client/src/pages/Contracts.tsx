@@ -17,7 +17,7 @@ import { Scroller } from '@/components/Scroller';
 import { EmptyValue, SectionHeading, StatusPill } from '@/components/primitives';
 import { usePhone } from '@/hooks/useMediaQuery';
 import { buildStamp } from '@/lib/format';
-import { CFG_FIELDS, DOCS, REPO, addressGroups, addressRows, cfgIdentical, cfgRows, commitUrl, docUrl, engineRows, honestySentences, sourcifyUrl, type DocIcon, type ParamRow } from '@/lib/contracts';
+import { CFG_FIELDS, DOCS, REPO, addressGroups, addressRows, cfgIdentical, cfgRows, commitUrl, docUrl, engineRows, honestySentences, ownerRows, sourcifyUrl, type AddressRow, type DocIcon, type ParamRow } from '@/lib/contracts';
 
 /** Tombol salin alamat (kartu telepon): clipboard API + toast; tanpa clipboard (http tanpa TLS / izin) → toast menjelaskan cara manual. */
 function CopyButton({ value, label }: { value: string; label: string }) {
@@ -31,8 +31,8 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   return <button type="button" className="soft-button" onClick={() => void copy()} aria-label={`Copy ${label}`}>{done ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />} {done ? 'Copied' : 'Copy'}</button>;
 }
 
-/** Kartu alamat per kontrak (telepon): label + catatan, alamat penuh membungkus (break-all), Copy / Arbiscan / Sourcify. */
-function AddressCards({ rows, groups }: { rows: ReturnType<typeof addressRows>; groups: string[] }) {
+/** Kartu alamat per kontrak (telepon): label + catatan, alamat penuh membungkus (break-all), Copy / Arbiscan / Sourcify (baris live owner: tanpa Sourcify). */
+function AddressCards({ rows, groups, live }: { rows: AddressRow[]; groups: string[]; live: AddressRow[] }) {
   return (
     <div className="address-cards">
       {groups.map((g) => (
@@ -40,13 +40,13 @@ function AddressCards({ rows, groups }: { rows: ReturnType<typeof addressRows>; 
           <h4 className="address-group__title mono">{g}</h4>
           <ul>
             {rows.filter((r) => r.group === g).map((r) => (
-              <li key={`${g}:${r.label}`} className="address-card" data-address={r.address}>
+              <li key={`${g}:${r.label}`} className="address-card" data-address={r.address} data-live={live.includes(r) ? 'owner' : undefined}>
                 <div className="address-card__head"><strong>{r.label}</strong><span className="muted-text">{r.note}</span></div>
                 <code className="address-card__addr mono">{r.address}</code>
                 <div className="address-card__links">
                   <CopyButton value={r.address} label={`${r.label} address`} />
                   <a className="soft-button" href={explorerAddress(r.address)} target="_blank" rel="noopener noreferrer" title={`${r.address} on Arbiscan`}>Arbiscan <ExternalLink size={11} /></a>
-                  <a className="soft-button" href={sourcifyUrl(r.address)} target="_blank" rel="noopener noreferrer" title={`Verified source on Sourcify (chain ${CHAIN_ID})`}>Sourcify <ExternalLink size={11} /></a>
+                  {live.includes(r) ? null : <a className="soft-button" href={sourcifyUrl(r.address)} target="_blank" rel="noopener noreferrer" title={`Verified source on Sourcify (chain ${CHAIN_ID})`}>Sourcify <ExternalLink size={11} /></a>}
                 </div>
               </li>
             ))}
@@ -57,10 +57,12 @@ function AddressCards({ rows, groups }: { rows: ReturnType<typeof addressRows>; 
   );
 }
 
-/** Tabel alamat: kelompok per pool + bersama; setiap baris label, alamat penuh (mono), catatan, Arbiscan ↗, Sourcify ↗. */
-function AddressPanel() {
+/** Tabel alamat: kelompok per pool + bersama; setiap baris label, alamat penuh (mono), catatan, Arbiscan ↗, Sourcify ↗. `live` = baris dari
+ *  snapshot (owner()) yang digabung ke kelompoknya; hitungan "N contracts" tetap hanya baris manifest. */
+function AddressPanel({ live }: { live: AddressRow[] }) {
   const rows = addressRows();
-  const groups = addressGroups(rows);
+  const all = [...rows, ...live];
+  const groups = addressGroups(all);
   const phone = usePhone();
   return (
     <article className="panel address-panel" aria-label="Contract addresses">
@@ -68,21 +70,21 @@ function AddressPanel() {
         <div><div className="eyebrow">Deployment manifest</div><h3>Addresses on {NETWORK_NAME} · {CHAIN_ID}</h3></div>
         <StatusPill tone="muted" title={`deployments/arbitrum-sepolia.json · deployed at block ${DEPLOYED_AT_BLOCK}`}>{rows.length} contracts · from block {DEPLOYED_AT_BLOCK.toString()}</StatusPill>
       </div>
-      {phone ? <AddressCards rows={rows} groups={groups} /> : (
+      {phone ? <AddressCards rows={all} groups={groups} live={live} /> : (
       <Scroller>
         <table className="series-table contracts-table">
           <thead><tr><th scope="col">Contract</th><th scope="col">Address</th><th scope="col">Role</th><th scope="col">Links</th></tr></thead>
           {groups.map((g) => (
             <tbody key={g} data-group={g} aria-label={g}>
               <tr className="contracts-group"><th scope="rowgroup" colSpan={4}>{g}</th></tr>
-              {rows.filter((r) => r.group === g).map((r) => (
-                <tr key={`${g}:${r.label}`} className="series-row" data-address={r.address}>
+              {all.filter((r) => r.group === g).map((r) => (
+                <tr key={`${g}:${r.label}`} className="series-row" data-address={r.address} data-live={live.includes(r) ? 'owner' : undefined}>
                   <td><strong>{r.label}</strong></td>
                   <td className="mono contracts-address" title={r.address}>{r.address}</td>
                   <td className="muted-text">{r.note}</td>
                   <td><span className="row-actions">
                     <a className="soft-button" href={explorerAddress(r.address)} target="_blank" rel="noopener noreferrer" title={`${r.address} on Arbiscan`}>Arbiscan <ExternalLink size={11} /></a>
-                    <a className="soft-button" href={sourcifyUrl(r.address)} target="_blank" rel="noopener noreferrer" title={`Verified source on Sourcify (chain ${CHAIN_ID})`}>Sourcify <ExternalLink size={11} /></a>
+                    {live.includes(r) ? null : <a className="soft-button" href={sourcifyUrl(r.address)} target="_blank" rel="noopener noreferrer" title={`Verified source on Sourcify (chain ${CHAIN_ID})`}>Sourcify <ExternalLink size={11} /></a>}
                   </span></td>
                 </tr>
               ))}
@@ -212,7 +214,7 @@ export default function Contracts() {
       <SectionHeading eyebrow={`Contracts · ${NETWORK_NAME} · ${CHAIN_ID}`} title="Contracts & protocol"
         detail={`Every address from the deployment manifest with Arbiscan and Sourcify links, the live cfg() of each pool (${POOL_KEYS.join(', ')}) and params() of the shared engine read from the block-pinned snapshot, the build of this dashboard, the documentation, and what is mocked on this testnet.`}
         action={<StatusPill tone="muted" title={`build ${COMMIT} · ${buildStamp(BUILD_TIME)}`}>build {COMMIT}</StatusPill>} />
-      <AddressPanel />
+      <AddressPanel live={ownerRows(snapshot)} />
       <div className="contracts-grid">
         <ConfigPanel cfgs={cfgs} emptyLabel={emptyLabel} blockNumber={snapshot?.blockNumber ?? null} blockTime={snapshot?.blockTime ?? null} />
         <EnginePanel rows={engineRows(snapshot?.vol ?? null)} emptyLabel={emptyLabel} />

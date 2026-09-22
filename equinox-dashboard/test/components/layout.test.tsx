@@ -1,7 +1,7 @@
 // test/components/layout.test.tsx — cangkang hidup dari fixture ChainContext: chrome testnet (strip, callout, tag board/seri, footer build),
 // status connecting | live | stale | RPC error (badge aria-live + kartu jaringan), banner RPC tiga state + tombol retry, tombol wallet
 // (tanpa wallet / connect / alamat / switch chain). Tanpa provider, tanpa jaringan.
-import { cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ALL_SERIES, BOARDS, CHAIN_ID, POOLS, POOL_KEYS, explorerAddress } from '@chain/deployment';
 import { shortAddr } from '@chain/ui/format';
@@ -140,5 +140,31 @@ describe('Layout — wallet button', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Arbitrum Sepolia/ }));
     expect(connect).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(shortAddr(USER))).toBeNull();
+  });
+});
+
+describe('Layout — route change scroll', () => {
+  it('scrolls to the top on a route change — smoothly, or instantly when the user prefers reduced motion (brief §8.4)', async () => {
+    const scrollTo = vi.fn();
+    const original = { scrollTo: window.scrollTo, matchMedia: window.matchMedia };
+    Object.defineProperty(window, 'scrollTo', { configurable: true, writable: true, value: scrollTo });
+    const prefersReduced = (on: boolean) => Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: (query: string) => ({
+      matches: on && query.includes('prefers-reduced-motion: reduce'), media: query, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }) });
+    const go = (hash: string) => act(async () => { window.location.hash = hash; window.dispatchEvent(new HashChangeEvent('hashchange')); });
+    try {
+      prefersReduced(false);
+      renderWithChain(page, { snapshot: liveSnapshot() });
+      expect(scrollTo).not.toHaveBeenCalled();   // not on the first mount
+      await go('#/boards');
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+      prefersReduced(true);
+      await go('#/trade');
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'auto' });
+    } finally {
+      Object.defineProperty(window, 'scrollTo', { configurable: true, writable: true, value: original.scrollTo });
+      Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: original.matchMedia });
+    }
   });
 });

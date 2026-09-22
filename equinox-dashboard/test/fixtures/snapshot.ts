@@ -19,8 +19,8 @@ export const FEED_UPDATED_AT = 1_789_909_342;
 export const SPOT = Number(FEED_ANSWER) / 1e8;
 /** Akun pengguna sintetis (checksum valid: hanya digit). */
 export const USER: Address = '0x1111111111111111111111111111111111111111';
-/** Owner/treasury pool di fixture = alamat deployer manifest (bukan literal baru). */
-export const OWNER: Address = DEPLOYER;
+/** Owner pool di fixture: EOA sintetis (checksum valid: hanya digit) — sengaja BUKAN `DEPLOYER` manifest, yang adalah kontrak deploy sekali-pakai. */
+export const OWNER: Address = '0x2222222222222222222222222222222222222222';
 const ASSET_SCALE = 10n ** 12n;
 /** Desimal → WAD lewat 6 dp bulat (menghindari presisi float pada 1e18). */
 const toWad = (x: number) => BigInt(Math.round(x * 1e6)) * ASSET_SCALE;
