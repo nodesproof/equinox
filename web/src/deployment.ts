@@ -32,6 +32,8 @@ export const SEQ = getAddress(P.sequencerFeed);
 export const FEED = getAddress(P.feed);
 export const DEPLOYER = getAddress(P.deployer);
 export const DEPLOYED_AT_BLOCK = BigInt(P.deployedAtBlock);
+/** Waktu blok deploy (unix s) dari `pools.deployedAt` manifest — anchor kedua interpolasi "≈ waktu blok" di dashboard (bersama blok/waktu snapshot). */
+export const DEPLOYED_AT = Math.floor(Date.parse(P.deployedAt) / 1000);
 export const MATH_SOL = getAddress(manifest.blackScholesSol);
 export const MATH_STYLUS = getAddress(manifest.blackScholesStylus);
 

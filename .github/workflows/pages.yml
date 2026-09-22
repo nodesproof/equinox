@@ -2,27 +2,52 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ['web/**', 'deployments/**', '.github/workflows/pages.yml']
+    paths: ['web/**', 'equinox-dashboard/**', 'deployments/**', '.github/workflows/pages.yml']
   workflow_dispatch:
-  # Harian 04:23 UTC: seed event (public/events-seed.json) disegarkan dan halaman dibangun ulang — langkah seed sudah toleran gagal.
+    inputs:
+      # app = dashboard React (equinox-dashboard/, lulus brief §9 — equinox-dashboard/ACCEPTANCE.md); classic = UI lama web/ (cadangan sampai submisi).
+      target:
+        description: 'Which frontend to deploy'
+        type: choice
+        options: [app, classic]
+        default: app
+  # Harian 04:23 UTC: seed event disegarkan dan halaman dibangun ulang — langkah seed toleran gagal (halaman lalu memindai penuh).
   schedule: [{ cron: '23 4 * * *' }]
 permissions: { contents: read, pages: write, id-token: write }
 concurrency: { group: pages, cancel-in-progress: true }
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # dispatch → input; push/schedule → variabel repo PAGES_TARGET (set `classic` agar cadangan bertahan melewati push & jadwal harian), lalu app.
+      TARGET: ${{ inputs.target || vars.PAGES_TARGET || 'app' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            equinox-dashboard/package-lock.json
+      # web/ selalu dipasang: data layer (@chain) aplikasi + skrip seed satu-satunya.
       - run: npm ci
         working-directory: web
       - run: npm run seed || echo "seed gagal — halaman memakai pemindaian penuh"
         working-directory: web
-      - run: npm run typecheck && npm test && npm run build
+      - name: classic (web/)
+        if: env.TARGET == 'classic'
+        run: npm run typecheck && npm test && npm run build
         working-directory: web
+      - name: app (equinox-dashboard/)
+        if: env.TARGET != 'classic'
+        run: |
+          npm ci
+          cp ../web/public/events-seed.json client/public/events-seed.json || echo "tanpa seed — pemindaian penuh"
+          npm run check && npm test && npm run build
+        working-directory: equinox-dashboard
       - uses: actions/upload-pages-artifact@v3
-        with: { path: web/dist }
+        with: { path: "${{ env.TARGET == 'classic' && 'web/dist' || 'equinox-dashboard/dist' }}" }
   deploy:
     needs: build
     runs-on: ubuntu-latest

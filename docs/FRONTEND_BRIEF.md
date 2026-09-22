@@ -15,7 +15,7 @@
 5. **Honesty rules in §7 are non-negotiable copy constraints** (testnet, mock USDG on Pools A/B vs the real Paxos USDG on Pool C, "indicative" vs "executed", what K5 parity does and does not claim).
 6. Acceptance is §9: your build is done when every check there passes against the live chain, not when it looks good.
 
-Table of contents: §1 Product · §2 Live deployment facts · §3 Data inventory · §4 Formulas & units · §5 Behavioural contract · §6 Write paths (wallet) · §7 Honesty & copy rules · §8 Design & engineering requirements · §9 Acceptance checklist · Appendix A ABI surface · Appendix B current implementation map · Appendix C sample values.
+Table of contents: §1 Product · §2 Live deployment facts · §3 Data inventory · §4 Formulas & units · §5 Behavioural contract · §6 Write paths (wallet) · §7 Honesty & copy rules · §8 Design & engineering requirements · §9 Acceptance checklist · Appendix A ABI surface · Appendix B implementation map (React app + data layer) · Appendix C sample values.
 
 ---
 
@@ -436,7 +436,26 @@ USDG: 2 dp for balances/NAV, **6 dp for quotes and payouts**; σ: 4 dp (3 in pre
 
 ---
 
-## Appendix B — Current implementation map (`web/`, Vite 6 + TS 5 + viem 2, no framework)
+## Appendix B — Implementation map
+
+**As built (Plan 5, 21–22 Sep 2026):** the frontend this brief asked for is `equinox-dashboard/` — React 19 + Vite 7 + Tailwind 4, hash routes under `/equinox/`; it passed every §9 item against the live chain on 22 Sep 2026 (`equinox-dashboard/ACCEPTANCE.md`), so `pages.yml` publishes it from the Plan 5 merge on. It does not copy the data layer: `web/src/{chain,deployment.ts,abi,ui/format.ts,ui/poll.ts}` is imported through the `@chain` alias, so B.2 below still describes every chain read and write.
+
+### B.1 React app (`equinox-dashboard/`)
+
+| Path | Responsibility |
+|---|---|
+| `client/src/App.tsx` | Providers (theme, tooltip, toaster, `ChainProvider`, `ClockProvider`) → wouter hash router (`useHashRoute`, query kept inside the hash) → `Layout` → six routes |
+| `client/src/chain/provider.tsx` | `ChainProvider`: the port of `web/src/main.ts` — `startPolling` (15 s, back-off, `?poll=`), `readSnapshot` → `readParity`/`readGas` (errors isolated), events from the seed then deltas every 4th refresh (`mergeEvents`), wallet state from `onWalletEvents` (released on unmount), `run(what, build, k)` = one action at a time → `write()` → tx log → `refreshNow()` |
+| `client/src/chain/{useSnapshot,useEvents,useWallet,useTrade,selectors,clock}.ts(x)` | Thin hooks over the context; selectors implement §4 (NAV/share, liability, caps, util, row status per pool, ATM, engine view); `useTrade` builds the §6 calls with executed-path caps (`executedBuy`/`executedClose` + `scaleFee`); the 1-s clock is a separate context so only ages/countdowns re-render |
+| `client/src/pages/*.tsx` | Overview, Boards, Trade, Portfolio, Activity, Contracts — §8.1 |
+| `client/src/components/*.tsx` | Layout (sidebar, sync badge, wallet button, ≤ 680 px drawer), RPC banner, metric/pool cards, board table + phone series cards, series detail (Greeks, K5 prices), σ chart (dependency-free SVG), events table, tx log (`aria-live`), amount input, pool switch |
+| `client/src/lib/*.ts` | Pure display logic: sync states, formatting helpers on top of `@chain/ui/format`, board cells and footnote, trade sentences, activity filters and ≈ block time (two anchors), contract rows |
+| `test/` | 158 vitest + Testing Library tests rendered from snapshot fixtures (live, stale, first-load error, no wallet, wrong network, paused, oracle stale, blackout, expired, settled, no positions, seed 404) |
+| `ACCEPTANCE.md` | §9 run against the live chain: 12/12, with the commands and numbers |
+
+Run: `(cd web && npm ci) && cd equinox-dashboard && npm ci && npm run dev` → `http://localhost:5174/equinox/` (or `npm run build && npm run preview` → port 4174).
+
+### B.2 Data layer and classic UI (`web/`, Vite 6 + TS 5 + viem 2, no framework)
 
 | File | Responsibility |
 |---|---|
@@ -455,9 +474,9 @@ USDG: 2 dp for balances/NAV, **6 dp for quotes and payouts**; σ: 4 dp (3 in pre
 | `src/main.ts` | wiring: seed → poll → snapshot → parity/gas/events → panels; account state |
 | `scripts/gen-abi.mjs`, `scripts/seed-events.ts` | ABI generation; build-time event seed |
 | `test/*.test.ts` | 33 unit tests; `parity.network.test.ts` (3, `EQUINOX_NETWORK_TESTS=1`); `smoke.network.test.ts` (real txs, `EQUINOX_SMOKE=1`, owner key) |
-| `.github/workflows/pages.yml`, `ci.yml` | Pages deploy from `main` (push + daily 04:23 UTC + manual); CI `web` job + ABI drift check |
+| `.github/workflows/pages.yml`, `ci.yml` | Pages deploy from `main` (push + daily 04:23 UTC + manual; `target: app` by default, `classic` = this UI); CI `web` and `app` jobs + ABI drift check |
 
-Run: `cd web && npm ci && npm run dev` → `http://localhost:5173/equinox/` (or `npm run build && npm run preview` → port 4173).
+Run the classic UI: `cd web && npm ci && npm run dev` → `http://localhost:5173/equinox/` (or `npm run build && npm run preview` → port 4173); deploy it instead of the app with `gh workflow run pages.yml -f target=classic`.
 
 ---
 

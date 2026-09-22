@@ -9,10 +9,20 @@ import { aggregatorV3Abi } from '../abi/aggregatorV3';
 
 // Satu `Snapshot` per refresh: tiga multicall (inti, seri, pengguna) yang semuanya dipaku ke blok yang sama; setiap bagian per pool diiterasi dari `POOL_KEYS`.
 export interface Quote { premium: bigint; fee: bigint; sigma: bigint; delta: bigint; vega: bigint; spot: bigint }
+/** `cfg()` pool — urutan & nama = tuple ABI; UI membaca bps/ambang dari sini (vega cap, reserve cap, minSize), bukan konstanta. */
+export interface PoolCfg {
+  feeBps: number; maxUtilBps: number; vegaCapBps: number; minPremiumBps: number; heartbeat: number; staleMult: number;
+  sequencerGrace: number; maxOpenSeries: number; tenorMax: number; minSize: bigint; settleBounty: bigint;
+}
 export interface PoolState {
   totalAssets: bigint; totalSupply: bigint; reserved: bigint; escrow: bigint; netVega: bigint; freeLiquidity: bigint;
-  sigmaMarkNow: bigint; capitalRefPrev: bigint; tradingPaused: boolean; cash: bigint; owner: Address;
+  sigmaMarkNow: bigint; capitalRefPrev: bigint; tradingPaused: boolean; cash: bigint; owner: Address; cfg: PoolCfg;
   boards: { settled: boolean; settlementPrice: bigint }[];
+}
+/** Engine bersama: σ_base/σ_mark(0)/varWad + `params()` lengkap + observasi terakhir (`lastRoundId`, `lastTs` unix s). */
+export interface VolState {
+  sigmaBase: bigint; sigmaMark0: bigint; varWad: bigint; vrp: bigint; alpha: bigint; spread: bigint;
+  lambdaPerDay: bigint; sigmaMin: bigint; sigmaMax: bigint; lastRoundId: bigint; lastTs: number;
 }
 export interface SeriesState { oi: bigint; settled: boolean; payoutPerUnit: bigint; buy: Quote | null; buyError: string | null; close: bigint | null }
 export type SeriesRow = { ref: SeriesRef } & Record<PoolKey, SeriesState>;
@@ -21,7 +31,7 @@ export interface UserState { address: Address; asset: Record<PoolKey, bigint>; a
 export interface Snapshot {
   fetchedAtMs: number; blockNumber: bigint; blockTime: number;
   feed: { answer: bigint; updatedAt: number; spotWad: bigint };
-  vol: { sigmaBase: bigint; sigmaMark0: bigint; varWad: bigint; vrp: bigint; alpha: bigint; spread: bigint };
+  vol: VolState;
   pools: Record<PoolKey, PoolState>;
   series: SeriesRow[];
   user: UserState | null;
@@ -50,34 +60,40 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
   const bn = block.number;
   const pool = (k: PoolKey) => ({ address: POOLS[k].pool, abi: equinoxPoolAbi } as const);
   const vol = { address: VOL, abi: equinoxVolEngineAbi } as const;
-  // --- inti: feed, engine, setiap pool (POOL_KEYS), board ---
+  // --- inti: feed, engine (σ, params, observasi terakhir), setiap pool (POOL_KEYS; state + cfg), board ---
   const coreCalls: Call[] = [
     { address: FEED, abi: aggregatorV3Abi, functionName: 'latestRoundData' },
     { ...vol, functionName: 'sigmaBase' }, { ...vol, functionName: 'sigmaMark', args: [0n] }, { ...vol, functionName: 'varWad' }, { ...vol, functionName: 'params' },
+    { ...vol, functionName: 'lastRoundId' }, { ...vol, functionName: 'lastTs' },
     ...POOL_KEYS.flatMap((k) => [
       { ...pool(k), functionName: 'totalAssets' }, { ...pool(k), functionName: 'totalSupply' }, { ...pool(k), functionName: 'reserved' },
       { ...pool(k), functionName: 'escrowedPayouts' }, { ...pool(k), functionName: 'netVega' }, { ...pool(k), functionName: 'freeLiquidity' },
       { ...pool(k), functionName: 'sigmaMarkNow' }, { ...pool(k), functionName: 'capitalRefPrev' }, { ...pool(k), functionName: 'tradingPaused' },
       { address: POOLS[k].asset, abi: mockUsdgAbi, functionName: 'balanceOf', args: [POOLS[k].pool] }, { ...pool(k), functionName: 'owner' },
+      { ...pool(k), functionName: 'cfg' },
       ...BOARDS.map((b) => ({ ...pool(k), functionName: 'board', args: [BigInt(b.id)] })),
     ]),
   ];
   const core = await client.multicall({ blockNumber: bn, allowFailure: true, contracts: coreCalls }) as MC[];
-  const per = 11 + BOARDS.length;
+  /** Jumlah panggilan engine di depan (indeks 0–6) dan per pool (11 state + cfg + satu `board` per board manifest). */
+  const HEAD = 7, per = 12 + BOARDS.length;
   const rd = must<readonly [bigint, bigint, bigint, bigint, bigint]>(core[0], 'latestRoundData');
   const params = must<readonly [bigint, bigint, bigint, bigint, bigint, bigint]>(core[4], 'params');
   const pools = {} as Record<PoolKey, PoolState>;
   POOL_KEYS.forEach((k, i) => {
-    const o = 5 + i * per;
+    const o = HEAD + i * per;
+    // `cfg()` = tuple 11 field urut ABI (uint16/uint32/uint8 → number, uint128 → bigint); wajib seperti `params` — angka cap/fee dibaca UI dari sini.
+    const c = must<readonly [number, number, number, number, number, number, number, number, number, bigint, bigint]>(core[o + 11], 'cfg');
     pools[k] = {
       totalAssets: must(core[o], 'totalAssets'), totalSupply: must(core[o + 1], 'totalSupply'), reserved: must(core[o + 2], 'reserved'),
       escrow: must(core[o + 3], 'escrowedPayouts'), netVega: must(core[o + 4], 'netVega'), freeLiquidity: must(core[o + 5], 'freeLiquidity'),
       sigmaMarkNow: ok<bigint>(core[o + 6]) ?? 0n, capitalRefPrev: must(core[o + 7], 'capitalRefPrev'), tradingPaused: must(core[o + 8], 'tradingPaused'),
       cash: must<bigint>(core[o + 9], 'cash') * ASSET_SCALE, owner: must(core[o + 10], 'owner'),
+      cfg: { feeBps: c[0], maxUtilBps: c[1], vegaCapBps: c[2], minPremiumBps: c[3], heartbeat: c[4], staleMult: c[5], sequencerGrace: c[6], maxOpenSeries: c[7], tenorMax: c[8], minSize: c[9], settleBounty: c[10] },
       // `board(id)` revert `BoardUnknown` bila board manifest belum terdaftar di pool ini (mis. list-boards gagal di tengah jalan: sudah ada di A/B,
       // belum di C) — pool pertama tetap wajib (`must`), pool lain memakai default "belum settle" agar halaman tidak jatuh.
       boards: BOARDS.map((_, j) => {
-        const r = core[o + 11 + j];
+        const r = core[o + 12 + j];
         const b = i === 0 ? must<readonly [bigint, boolean, bigint, readonly bigint[]]>(r, 'board') : ok<readonly [bigint, boolean, bigint, readonly bigint[]]>(r);
         return b ? { settled: b[1], settlementPrice: b[2] } : { settled: false, settlementPrice: 0n };
       }),
@@ -125,7 +141,11 @@ export async function readSnapshot(client: Client, account?: Address): Promise<S
   return {
     fetchedAtMs: Date.now(), blockNumber: bn, blockTime: Number(block.timestamp),
     feed: { answer: rd[1], updatedAt: Number(rd[3]), spotWad: rd[1] * 10n ** 10n },
-    vol: { sigmaBase: must(core[1], 'sigmaBase'), sigmaMark0: must(core[2], 'sigmaMark0'), varWad: must(core[3], 'varWad'), vrp: params[1], alpha: params[2], spread: params[3] },
+    vol: {
+      sigmaBase: must(core[1], 'sigmaBase'), sigmaMark0: must(core[2], 'sigmaMark0'), varWad: must(core[3], 'varWad'),
+      lambdaPerDay: params[0], vrp: params[1], alpha: params[2], spread: params[3], sigmaMin: params[4], sigmaMax: params[5],
+      lastRoundId: must(core[5], 'lastRoundId'), lastTs: Number(must<bigint>(core[6], 'lastTs')),
+    },
     pools, series, user,
   };
 }
