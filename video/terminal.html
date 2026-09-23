@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>terminal</title>
+<!-- A terminal window replaying the verbatim output of a command run at take time (select.ts): the lines are never typed by hand. -->
+<style>
+  /*FONTS*/
+  :root { --bg:#0b1220; --panel:#0a0f1a; --line:#22304a; --fg:#e6edf7; --dim:#7f8fa9; --gold:#f2c94c; --green:#4cd28a; --red:#f06a6a; }
+  html, body { margin:0; width:1920px; height:1080px; background:var(--bg); color:var(--fg); overflow:hidden; font:25px/1.55 "Martian Mono", "DejaVu Sans Mono", ui-monospace, monospace; }
+  .win { position:absolute; inset:70px 130px; background:var(--panel); border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column; box-shadow:0 30px 90px rgba(0,0,0,.45); }
+  .bar { display:flex; align-items:center; gap:10px; padding:16px 22px; border-bottom:1px solid var(--line); color:var(--dim); font-size:19px; }
+  .dot { width:13px; height:13px; border-radius:50%; } .dot:nth-child(1) { background:#f06a6a } .dot:nth-child(2) { background:#f2c94c } .dot:nth-child(3) { background:#4cd28a }
+  .title { margin-left:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .body { padding:22px 30px; flex:1; overflow:hidden; display:flex; flex-direction:column; justify-content:flex-start; }
+  .cols { columns:2; column-gap:80px; }
+  .l { white-space:pre; opacity:0; transition:opacity .15s ease; }
+  .l.on { opacity:1; }
+  .p { color:var(--gold); } .ok { color:var(--green); } .bad { color:var(--red); } .h { color:var(--dim); } .cmd { color:var(--fg); }
+  .cursor { display:inline-block; width:13px; height:27px; background:var(--fg); vertical-align:-5px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity:0 } }
+</style>
+<div class="win"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="title" id="title"></span></div><div class="body" id="body"></div></div>
+<script>
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const cls = (l) => (l.startsWith("$ ") ? "cmd" : l.startsWith("OK") ? "ok" : l.startsWith("BEDA") ? "bad" : l.startsWith("==") ? "h" : "");
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // render({ title, command, lines, intervalMs, columns }): prompt + command, then the output line by line.
+  window.render = async ({ title, command, lines, intervalMs = 120, columns = false }) => {
+    document.getElementById("title").textContent = title;
+    const body = document.getElementById("body");
+    body.innerHTML = command ? `<div class="l on"><span class="p">$</span> <span class="cmd">${esc(command)}</span></div>` : "";
+    const box = document.createElement("div");
+    if (columns) box.className = "cols";
+    body.appendChild(box);
+    for (const line of lines) {
+      const div = document.createElement("div");
+      div.className = `l ${cls(line)}`;
+      div.innerHTML = line.startsWith("$ ") ? `<span class="p">$</span> ${esc(line.slice(2))}` : esc(line);
+      box.appendChild(div);
+      requestAnimationFrame(() => div.classList.add("on"));
+      if (intervalMs) await sleep(intervalMs);
+    }
+    const c = document.createElement("div");
+    c.className = "l on";
+    c.innerHTML = '<span class="p">$</span> <span class="cursor"></span>';
+    body.appendChild(c);
+  };
+</script>

@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cards</title>
+<!-- Equinox video cards, 1920×1080, in the dashboard's own palette and fonts (record.ts injects the self-hosted woff2 files as data: URIs
+     at /*FONTS*/). Numbers on these cards are measured values with their source in the foot; nothing here is live data. -->
+<style>
+  /*FONTS*/
+  :root { --bg:#0b1220; --panel:#111a2b; --line:#22304a; --fg:#e6edf7; --muted:#8fa0bb; --dim:#7f8fa9; --gold:#f2c94c; --violet:#a991f5; --green:#4cd28a; }
+  html, body { margin:0; width:1920px; height:1080px; overflow:hidden; color:var(--fg);
+    background: radial-gradient(circle at 78% -8%, rgba(60,77,132,.22), transparent 38%), radial-gradient(circle at 6% 92%, rgba(242,201,76,.05), transparent 34%), var(--bg);
+    font-family: "Instrument Sans", "Inter", ui-sans-serif, system-ui, sans-serif; }
+  .card { position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; padding:0 150px 120px; box-sizing:border-box; opacity:0; transition:opacity .35s ease; }
+  .card.on { opacity:1; }
+  .eyebrow { display:flex; align-items:center; gap:14px; color:var(--gold); font:500 21px/1 "Martian Mono", "DejaVu Sans Mono", monospace; letter-spacing:.12em; text-transform:uppercase; }
+  .eyebrow::before { content:""; width:42px; height:2px; background:var(--gold); }
+  h1 { font-size:112px; line-height:1.02; letter-spacing:-.045em; margin:30px 0 26px; font-weight:600; }
+  h1 em { color:var(--gold); font-style:italic; font-weight:500; }
+  h2 { font-size:64px; line-height:1.05; letter-spacing:-.035em; margin:26px 0 34px; font-weight:600; }
+  .sub { font-size:38px; line-height:1.3; color:var(--muted); max-width:34ch; }
+  .mono { font-family:"Martian Mono", "DejaVu Sans Mono", monospace; }
+  .foot { position:absolute; left:150px; right:150px; bottom:150px; display:flex; justify-content:space-between; gap:40px; border-top:1px solid var(--line); padding-top:26px; color:var(--dim); font:20px/1.45 "Martian Mono", "DejaVu Sans Mono", monospace; }
+  /* problem: premium vs sigma bars */
+  .bars { display:grid; gap:18px; margin-top:6px; width:1250px; }
+  .bar { display:grid; grid-template-columns:230px 1fr 250px; align-items:center; gap:26px; font:30px/1 "Martian Mono", monospace; }
+  .bar .sig { color:var(--muted); }
+  .bar .track { height:26px; border-radius:6px; background:#18253a; overflow:hidden; }
+  .bar .fill { height:100%; border-radius:6px; background:linear-gradient(90deg, rgba(242,201,76,.55), var(--gold)); }
+  .bar .val { text-align:right; }
+  .bar.hot .val { color:var(--gold); }
+  /* claim: flow */
+  pre.flow { margin:10px 0 0; font:29px/1.55 "Martian Mono", "DejaVu Sans Mono", monospace; color:var(--fg); }
+  pre.flow b { color:var(--gold); font-weight:500; } pre.flow i { color:var(--violet); font-style:normal; } pre.flow s { color:var(--dim); text-decoration:none; }
+  /* gas tables */
+  table { border-collapse:collapse; font:31px/1.2 "Martian Mono", "DejaVu Sans Mono", monospace; width:1620px; }
+  th { color:var(--dim); font:600 20px/1 "Martian Mono", monospace; text-transform:uppercase; letter-spacing:.1em; text-align:right; padding:0 0 18px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  td { padding:22px 0; border-bottom:1px solid rgba(34,48,74,.7); text-align:right; }
+  td:first-child { font-family:"Instrument Sans", sans-serif; font-size:34px; }
+  td small { color:var(--dim); font-size:24px; }
+  td.win { color:var(--gold); } td.lose { color:var(--muted); }
+  .note { margin-top:30px; color:var(--muted); font-size:30px; max-width:62ch; line-height:1.35; }
+  /* pending + end */
+  .facts { display:grid; gap:20px; margin-top:8px; font:31px/1.35 "Martian Mono", "DejaVu Sans Mono", monospace; }
+  .facts span { color:var(--dim); }
+  .links { display:grid; gap:18px; font:36px/1.2 "Martian Mono", "DejaVu Sans Mono", monospace; margin-top:34px; }
+  .links span { color:var(--dim); display:inline-block; width:150px; }
+  .disclose { margin-top:44px; max-width:70ch; color:var(--muted); font-size:27px; line-height:1.45; }
+  .ring { position:absolute; right:150px; top:150px; width:120px; height:120px; border-radius:50%; border:10px solid var(--gold); box-shadow:0 0 60px rgba(242,201,76,.18); }
+</style>
+
+<div class="card" id="problem">
+  <div class="eyebrow">Arbitrum Open House Singapore · Online Buildathon</div>
+  <h1>Whose volatility is it?</h1>
+  <div class="sub" style="margin-bottom:34px">ETH call, 5 % out of the money: K 4,200 · 7 days · S = 4,000. Black-Scholes premium at three volatilities —</div>
+  <div class="bars">
+    <div class="bar"><span class="sig">σ 50 %</span><span class="track"><span class="fill" style="width:51.5%;display:block"></span></span><span class="val">40.22 USDG</span></div>
+    <div class="bar"><span class="sig">σ 60 %</span><span class="track"><span class="fill" style="width:75%;display:block"></span></span><span class="val">58.62 USDG</span></div>
+    <div class="bar hot"><span class="sig">σ 70 %</span><span class="track"><span class="fill" style="width:100%;display:block"></span></span><span class="val">78.14 +33 %</span></div>
+  </div>
+  <div class="foot"><span>Premiums: PRD §6.7 (Black-Scholes, r = 0)</span><span>σ is the one input nobody can observe</span></div>
+</div>
+
+<div class="card" id="claim">
+  <div class="eyebrow">Equinox</div>
+  <h1>No IV oracle.</h1>
+<pre class="flow"><b>Chainlink ETH/USD</b> ─▶ <b>EquinoxVolEngine</b>   <s>σ_base = EWMA of log-returns, on-chain</s>
+                         │
+                         ▼
+        σ_mark = σ_base × VRP × (1 + α · inventory)
+                         │
+                         ▼
+<b>EquinoxPool</b> ── STATICCALL ─▶ <i>black_scholes</i>   <s>Rust, Arbitrum Stylus</s></pre>
+  <div class="foot"><span>Arbitrum Sepolia · 421614</span><span>Pool A = Solidity control · Pool B = Stylus, cached · Pool C = Stylus on Paxos USDG</span></div>
+</div>
+
+<div class="card" id="settlement-pending">
+  <div class="eyebrow">Scheduled — not happened yet</div>
+  <h2>First real settlement<br><span class="mono" style="color:var(--gold)" data-field="expiryUtc">—</span></h2>
+  <div class="facts">
+    <div><span>board&nbsp;&nbsp;</span>#<span data-field="boardId" style="color:var(--fg)">0</span> · strikes 2,400 / 2,600 / 2,800 · pools A, B and C</div>
+    <div><span>round&nbsp;&nbsp;</span>the first fresh Chainlink ETH/USD round after expiry</div>
+    <div><span>keeper&nbsp;</span>GitHub Actions cron, every 15 min · settle is permissionless</div>
+  </div>
+  <div class="foot"><span>This section of the video is re-shot after the settlement</span><span>docs/DEMO_RUNBOOK.md › D</span></div>
+</div>
+
+<div class="card" id="gas">
+  <div class="eyebrow">Math, measured — gas per call</div>
+  <table>
+    <tr><th>call</th><th>Solidity control</th><th>Stylus (cached)</th><th>ratio</th></tr>
+    <tr><td>normCdf</td><td>5,435</td><td>8,327</td><td class="lose">0.65×</td></tr>
+    <tr><td>quote <small>price + 4 Greeks</small></td><td>24,536</td><td>14,837</td><td class="win">1.65×</td></tr>
+    <tr><td>impliedVol <small>20 iterations</small></td><td>616,839</td><td>223,373</td><td class="win">2.76×</td></tr>
+    <tr><td>markPortfolio <small>32 series</small></td><td>1,242,892</td><td>427,448</td><td class="win">2.91×</td></tr>
+  </table>
+  <div class="foot"><span>Arbitrum Sepolia, program cached — equal to the devnode-derived column</span><span>docs/BENCHMARK.md</span></div>
+</div>
+
+<div class="card" id="gas-tx">
+  <div class="eyebrow">Whole pool transactions — two identical pools</div>
+  <table>
+    <tr><th>transaction</th><th>Solidity control</th><th>Stylus (cached)</th><th>ratio</th></tr>
+    <tr><td>buy <small>10 × C 4,200</small></td><td>387,211</td><td>367,932</td><td class="win">1.05×</td></tr>
+    <tr><td>close <small>5 units</small></td><td>254,792</td><td>235,533</td><td class="win">1.08×</td></tr>
+    <tr><td>deposit <small>6 open series</small></td><td>219,538</td><td>220,352</td><td class="lose">0.996×</td></tr>
+  </table>
+  <div class="note">Storage, token transfers and call overhead dominate a pool transaction. 256-bit arithmetic itself costs more in WASM: an <span class="mono">I256</span> mul + div pair is 105 gas, ≈ 30–40 in the EVM.</div>
+  <div class="foot"><span>Nitro devnode, identical inputs on both pools</span><span>docs/BENCHMARK.md · not 10×</span></div>
+</div>
+
+<div class="card" id="end">
+  <div class="ring"></div>
+  <div class="eyebrow">On-chain ETH options · no IV oracle</div>
+  <h1>Equinox</h1>
+  <div class="links">
+    <div><span>live</span>nodesproof.github.io/equinox</div>
+    <div><span>code</span>github.com/nodesproof/equinox</div>
+    <div><span>chain</span>Arbitrum Sepolia · 421614</div>
+  </div>
+  <div class="disclose">USDG on pools A/B and the sequencer uptime feed are mocks; pool C settles in real Paxos USDG at faucet scale; the price feed is the real Chainlink ETH/USD. Testnet only. MIT.</div>
+</div>
+
+<script>
+  // render({ card, data }) shows one card; data fills [data-field] slots (e.g. the scheduled expiry) from the take.
+  window.render = ({ card, data = {} }) => {
+    document.querySelectorAll(".card").forEach((c) => c.classList.toggle("on", c.id === card));
+    for (const [k, v] of Object.entries(data)) document.querySelectorAll(`#${card} [data-field="${k}"]`).forEach((el) => (el.textContent = String(v)));
+    return new Promise((r) => setTimeout(r, 400));
+  };
+</script>
