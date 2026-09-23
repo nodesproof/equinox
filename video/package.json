@@ -1,0 +1,10 @@
+{
+  "name": "equinox-video",
+  "private": true,
+  "type": "module",
+  "description": "Re-shootable demo video pipeline for Equinox. See README.md.",
+  "devDependencies": {
+    "playwright": "1.61.1",
+    "viem": "2.56.8"
+  }
+}

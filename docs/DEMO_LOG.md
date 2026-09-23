@@ -123,3 +123,16 @@ USDG asli: owner 9735133 · keeper 0 · pool 90264867
 **Status akhir: seed, redeem, dan trade pertama (buy+close) di Pool C semuanya selesai dan nyata di USDG Paxos asli.** Wallet keeper masih 0 USDG — LP kedua (`seed --keeper`) tetap menunggu permintaan faucet hariannya sendiri, belum dijalankan.
 
 **Post-mortem: approve berlebih.** Transaksi ke-4 yang ditemukan saat run trade di atas (`0x1f3fbca8…9ca2767`, gas 41.809) dipicu bug bash, bukan bug kontrak: perbandingan `[ … -ge … ]` pada allowance ~1,16×10⁷⁷ (sisa `approve(…, MAX)` dari `seed`) meluap, karena aritmetika integer bash mentok di sekitar 2⁶³ — `[` gagal dengan error alih-alih true/false, dan `||` tetap memicu `send` approve. Diperbaiki di commit ini: kedua pengecekan allowance yang bisa melihat angka seuram itu (`seed)`, `trade)`) sekarang lewat helper baru `ge()` yang membandingkan dengan integer presisi-bebas Python, bukan `[ -ge ]` bash; pengecekan saldo yang cuma pernah melihat angka kecil dan dibatasi faucet (mis. `BAL`, `maxRedeem`, `freeLiquidity`) dibiarkan seperti semula. `trade` yang dijalankan ulang pada wallet yang allowance-nya sudah MAX kini melewati langkah approve dengan benar, tanpa transaksi tersembunyi.
+
+## 2026-09-22 — transaksi untuk video demo (`video/`, akun filming = owner `0x9035…076D`, Pool B, mock USDG)
+
+Pipeline video (Plan 5, `video/README.md`) merekam dashboard publik dengan wallet EIP-1193 yang disuntikkan: permintaan `eth_sendTransaction` dari halaman melewati binding Playwright, diperiksa terhadap daftar izin (hanya pool B, `buy` ≤ ukuran take atau `claim`), lalu ditandatangani di proses Node — kunci tidak pernah masuk ke browser. Semua transaksi di bawah berstatus `success`.
+
+| Waktu (UTC) | Aksi | Detail | Tx |
+|---|---|---|---|
+| 23:29:54 | straddle board 0 — `buy` 0.1 C 2600 #0 (25 Sep), di luar kamera (`video/trade.ts`) | premi 16.762218 + fee ≈ 0.502867 USDG, cap 17.437735; gas 330,162; blok 311709719 | [0x52dcee61…29e0](https://sepolia.arbiscan.io/tx/0x52dcee61b115d027ea3a35be209446c17cd64977483f012d77e42813856129e0) |
+| 23:30:00 | straddle board 0 — `buy` 0.1 P 2600 #0 (25 Sep), di luar kamera | premi 1.026082 + fee ≈ 0.030783 USDG, cap 1.067433; gas 288,210; blok 311709744 | [0x90bc114e…5989](https://sepolia.arbiscan.io/tx/0x90bc114e7be570056250049f3ced85dd5cb0b7fc27685f7511344a24ba295989) |
+| 23:44:20 | take 1 (dibuang: aksi terlambat dari narasi) — `buy` 0.1 C 2600 #1 (2 Oct) lewat dashboard | gas 325,870; blok 311713113 | [0xcbebc0d5…ac42](https://sepolia.arbiscan.io/tx/0xcbebc0d5eae4780a44b418cf378052b744addc5e7f0ec71c3db756fdf6ebac42) |
+| 23:49:06 | take 2 (yang dipakai draft) — `buy` 0.1 C 2600 #1 (2 Oct) lewat dashboard, di kamera | 21.56393 + 0.628076 USDG (transfer ERC-20 di Arbiscan), cap 21.779589; gas 257,774; blok 311714240 | [0x4c53d439…0e9f](https://sepolia.arbiscan.io/tx/0x4c53d4397dba4e1210088fb436b65d201a7495d9b895a281a23d3cb81ff90e9f) |
+
+Straddle 0.1 C + 0.1 P 2600 pada board 0 dibeli agar klaim di video settlement (Jum 25 Sep 2026 08:00 UTC) membayar ke arah mana pun ETH bergerak; posisi owner di Pool B kini juga 0.20 C 2600 #1 dari dua take. Klaim dan harga settlement ditambahkan di sini setelah Jumat.
